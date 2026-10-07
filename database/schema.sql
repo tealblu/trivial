@@ -18,29 +18,36 @@ CREATE TABLE IF NOT EXISTS `daily_reminders` (
   PRIMARY KEY (`server_id`)
 );
 
--- One row per (guild, user, game, day): many users x many games,
--- one score per message. Re-posting a daily score overwrites the row.
--- `day` is YYYY-MM-DD in the bot's target timezone (TIMEZONE env var; UTC by
--- default)
+-- One row per (guild, user, game, iteration): many users x many games,
+-- one score per puzzle. Re-posting the same puzzle overwrites the row.
+-- `iteration` is the game's own puzzle identifier — Wordle's puzzle number
+-- ("1925"), Krillion's "#64", Metazooa's "#1153", or, for games whose share
+-- labels the puzzle by date (dialed, maptap), the share's own date as
+-- YYYY-MM-DD ("2026-09-18"). Keying on the iteration instead of the log date
+-- keeps boards consistent even when games reset or iterate at different
+-- times than the bot's calendar.
 -- `score` is REAL so decimal scores (e.g. dialed's 40.49/50) store exactly;
 -- most games still write whole numbers.
+-- `day` is the date the score was LOGGED (YYYY-MM-DD, bot's target timezone)
+-- and exists purely for reference — nothing is keyed or ranked off it.
 CREATE TABLE IF NOT EXISTS `user_scores` (
   `guild_id`   varchar(20)  NOT NULL,
   `user_id`    varchar(20)  NOT NULL,
   `game`       varchar(32)  NOT NULL,
-  `day`        varchar(10)  NOT NULL,
+  `iteration`  varchar(32)  NOT NULL,
   `score`      real         NOT NULL,
   `user_name`  varchar(255) NOT NULL,
   `meta`       text         NULL,
+  `day`        varchar(10)  NOT NULL,
   `created_at` timestamp    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`guild_id`, `user_id`, `game`, `day`)
+  PRIMARY KEY (`guild_id`, `user_id`, `game`, `iteration`)
 );
 
--- Leaderboard queries filter by (guild_id, day) and (guild_id, game, day);
--- the primary key only helps on the guild_id prefix, so these indexes keep
--- /scores fast even after a large backfill. Applied on every startup via
--- executescript, so existing databases get them too.
+-- Leaderboard queries filter on (guild_id, game, iteration) to pick each
+-- game's latest iteration; the reminder's play-day queries filter on
+-- (guild_id, day). Applied on every startup via executescript, so existing
+-- databases get them too.
+CREATE INDEX IF NOT EXISTS `idx_user_scores_guild_game_iteration`
+  ON `user_scores` (`guild_id`, `game`, `iteration`);
 CREATE INDEX IF NOT EXISTS `idx_user_scores_guild_day`
   ON `user_scores` (`guild_id`, `day`);
-CREATE INDEX IF NOT EXISTS `idx_user_scores_guild_game_day`
-  ON `user_scores` (`guild_id`, `game`, `day`);

@@ -19,7 +19,7 @@ from discord.ext import commands, tasks
 from discord.ext.commands import Context
 from dotenv import load_dotenv
 
-from database import DatabaseManager
+from database import DatabaseManager, migrate_user_scores_schema
 from parsers.registry import discover_parsers
 
 load_dotenv()
@@ -151,6 +151,9 @@ class TrivialBot(commands.Bot):
 
     async def init_db(self) -> None:
         async with aiosqlite.connect(DATABASE_PATH) as db:
+            # Rebuild pre-iteration tables BEFORE schema.sql so its indexes
+            # (which reference the `iteration` column) can be created.
+            await migrate_user_scores_schema(db)
             with open(f"{BASE_DIR}/database/schema.sql", encoding="utf-8") as file:
                 await db.executescript(file.read())
             await db.commit()

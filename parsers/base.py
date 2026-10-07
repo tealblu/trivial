@@ -35,7 +35,8 @@ class ScoreResponse:
     game: str = ""  # Falls back to the parser's `game` if left unset
     user_id: int | None = None  # Discord user ID of the scorer
     username: str = ""  # Display name, for logging / embeds
-    day: str = field(default_factory=today_str)  # YYYY-MM-DD (bot's timezone)
+    iteration: str = ""  # The game's own puzzle identifier (e.g. "1925" or "2026-09-18")
+    day: str = field(default_factory=today_str)  # YYYY-MM-DD the score was logged (reference only)
     meta: dict[str, str] = field(default_factory=dict)  # e.g. {"number": "1234", "mode": "hard"}
     description: str | None = None
     color: int = 0x2F3136  # Default Discord dark embed color
@@ -48,7 +49,8 @@ class ScoreRecord:
     user_id: int
     user_name: str
     game: str
-    day: str
+    iteration: str
+    day: str  # date the score was logged (reference only; never keyed)
     score: int | float
     meta: dict[str, str] | None = None
 
@@ -81,14 +83,19 @@ class ScoreParser(ABC):
         *,
         title: str,
         score: int | float | None,
+        iteration: str | None = None,
         day: str | None = None,
     ) -> ScoreResponse:
         """Build a ScoreResponse pre-filled with this game and the author's details.
 
         :param message: The message the score was extracted from.
         :param title: Title shown on the response embed, e.g. "Color Daily".
-        :param score: The numeric score for this game/author/day.
-        :param day: Optional ``YYYY-MM-DD`` date; ``None`` keeps today's date.
+        :param score: The numeric score for this game/author/iteration.
+        :param iteration: The game's own puzzle identifier — its puzzle number
+            (e.g. "1925") or, for date-labelled shares, the share's own date
+            as ``YYYY-MM-DD``. Required before the score is saved.
+        :param day: Optional log date (``YYYY-MM-DD``); ``None`` keeps today's
+            date. Informational only — never used to key or rank scores.
         """
         resp = ScoreResponse(
             title=title,
@@ -97,12 +104,14 @@ class ScoreParser(ABC):
             user_id=message.author.id,
             username=message_author_display_name(message),
         )
+        if iteration:
+            resp.iteration = iteration
         if day:
             resp.day = day
         return resp
 
     def format_response(self, score_response: ScoreResponse) -> discord.Embed:
-        """Default embed: title, description, a Score field, and author/day footer.
+        """Default embed: title, description, a Score field, and author/footer.
 
         Override for a richer per-game embed (e.g. extra fields from ``meta``).
         """
@@ -114,7 +123,10 @@ class ScoreParser(ABC):
         embed.add_field(
             name="Score", value=format_score(score_response.score), inline=True
         )
-        embed.set_footer(text=f"{score_response.username} · {score_response.day}")
+        embed.set_footer(
+            text=f"{score_response.username} · {score_response.day} · "
+            f"iteration {score_response.iteration}"
+        )
         return embed
 
     async def record_score(
@@ -134,7 +146,8 @@ class ScoreParser(ABC):
             user_id=response.user_id or message.author.id,
             user_name=response.username or message_author_display_name(message),
             game=self.game,
-            day=response.day,
+            iteration=response.iteration,
             score=response.score,
             meta=response.meta,
+            day=response.day,
         )

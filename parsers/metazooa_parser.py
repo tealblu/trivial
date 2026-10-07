@@ -9,17 +9,18 @@ from .base import ScoreParser, ScoreResponse
 
 class MetazooaScoreParser(ScoreParser):
     """Parser for metazooa.com daily scores.
-        🦧 Animal #1153 🦔
-        I figured it out in 5 guesses!
-        🟥🟨🟨🟨🟩
-        🔥 1 | Avg. Guesses: 5
 
-    a stumped run:
-        🐄 Animal #1153 🪼
-        I was stumped by today's game!
-        🟨🟨🟨🟨🟨🟨🟨🟨🟨🟨🟩🟩🟩🟩🟩🟩🟨🟨🟧🟨
-        🔥 0 | Avg. Guesses: 0
+    Example score message (see ``example_message``): the puzzle number in the
+    header ("Animal #1153") is the iteration — everything is keyed off it, not
+    the date the share was posted.
     """
+
+    # A full pasted share — the header carries the iteration number.
+    example_message = """🦧 Animal #1153 🦔
+I figured it out in 5 guesses!
+🟥🟨🟨🟨🟩
+🔥 1 | Avg. Guesses: 5
+metazooa.com"""
 
     game = "metazooa"
     score_sort = "asc"  # fewer guesses is better
@@ -72,7 +73,9 @@ class MetazooaScoreParser(ScoreParser):
         streak = stats.group(1) if stats else ""
         average = stats.group(2) if stats else ""
 
-        resp = self._build_response(message, title="Metazooa", score=score)
+        resp = self._build_response(
+            message, title="Metazooa", score=score, iteration=number
+        )
         if number:
             resp.meta["number"] = number
         if streak:

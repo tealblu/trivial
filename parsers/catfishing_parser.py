@@ -9,7 +9,18 @@ from .common import FRACTION_SCORE_RE, parse_fraction_score
 
 
 class CatfishingScoreParser(ScoreParser):
-    """Parser for catfishing.net daily scores."""
+    """Parser for catfishing.net daily scores.
+
+    Example score message (see ``example_message``): the puzzle number in the
+    score line ("#815") is the iteration — everything is keyed off it, not the
+    date the share was posted.
+    """
+
+    # A full pasted share — the "#N" line carries the iteration number.
+    example_message = """catfishing.net
+#815
+4/10
+# # # # █"""
 
     game = "catfishing"
     score_sort = "desc"  # higher score is better
@@ -62,7 +73,9 @@ class CatfishingScoreParser(ScoreParser):
             if line.strip() and FRACTION_SCORE_RE.search(line) is None
         ]
 
-        resp = self._build_response(message, title="Catfishing", score=score)
+        resp = self._build_response(
+            message, title="Catfishing", score=score, iteration=number
+        )
         if number:
             resp.meta["number"] = number
         if total:

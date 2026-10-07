@@ -17,6 +17,73 @@ if TYPE_CHECKING:
     from parsers.base import ScoreRecord
 
 
+def _iteration_key(value: str) -> tuple[int, int | str]:
+    """Ordering key for an iteration string.
+
+    Numeric puzzles (e.g. Wordle "1925") must compare numerically so that
+    "999" is older than "1000" — a plain string sort gets that wrong.
+    Anything else (e.g. dialed/maptap YYYY-MM-DD share dates) compares
+    lexicographically, which is correct for ISO dates.
+    """
+    try:
+        return 0, int(value)
+    except ValueError:
+        return 1, value
+
+
+async def migrate_user_scores_schema(connection: aiosqlite.Connection) -> None:
+    """Rebuild an old day-keyed ``user_scores`` table as iteration-keyed.
+
+    Pre-iteration databases stored one row per (guild, user, game, day).
+    This rebuilds the table so the primary key is
+    (guild_id, user_id, game, iteration). Rows whose ``meta`` JSON carries a
+    ``number`` (wordle, krillion, catfishing, metazooa) are kept with that
+    iteration; dialed/maptap rows have no puzzle number, so they are dropped
+    (re-record them with ``!backfill``). Fresh or already-migrated tables are
+    left untouched. Run BEFORE executing ``schema.sql`` so its indexes can be
+    created against the new shape.
+    """
+    cursor = await connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='user_scores'"
+    )
+    if await cursor.fetchone() is None:
+        return
+
+    cursor = await connection.execute("PRAGMA table_info(user_scores)")
+    columns = await cursor.fetchall()
+    if any(row[1] == "iteration" for row in columns):
+        return
+
+    await connection.executescript(
+        """
+        BEGIN;
+        CREATE TABLE user_scores_migrated (
+          `guild_id`   varchar(20)  NOT NULL,
+          `user_id`    varchar(20)  NOT NULL,
+          `game`       varchar(32)  NOT NULL,
+          `iteration`  varchar(32)  NOT NULL,
+          `score`      real         NOT NULL,
+          `user_name`  varchar(255) NOT NULL,
+          `meta`       text         NULL,
+          `day`        varchar(10)  NOT NULL,
+          `created_at` timestamp    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (`guild_id`, `user_id`, `game`, `iteration`)
+        );
+        INSERT INTO user_scores_migrated
+            (guild_id, user_id, user_name, game, iteration, score, meta, day, created_at)
+          SELECT guild_id, user_id, user_name, game,
+                 json_extract(meta, '$.number'),
+                 score, meta, day, created_at
+          FROM user_scores
+          WHERE json_extract(meta, '$.number') IS NOT NULL;
+        DROP TABLE user_scores;
+        ALTER TABLE user_scores_migrated RENAME TO user_scores;
+        COMMIT;
+        """
+    )
+    await connection.commit()
+
+
 class DatabaseManager:
     def __init__(self, *, connection: aiosqlite.Connection) -> None:
         self.connection = connection
@@ -100,28 +167,45 @@ class DatabaseManager:
         user_id: int,
         user_name: str,
         game: str,
-        day: str,
+        iteration: str,
         score: int | float | None,
         meta: dict[str, str] | None = None,
+        day: str = "",
     ) -> None:
-        """Log one user's score for one game on one day."""
+        """Log one user's score for one puzzle iteration of one game."""
         if score is None:
-            raise ValueError("record_user_score requires a numeric score; parser did not set ScoreResponse.score")
+            raise ValueError(
+                "record_user_score requires a numeric score; "
+                "parser did not set ScoreResponse.score"
+            )
+        if not iteration:
+            raise ValueError(
+                "record_user_score requires an iteration (the game's own puzzle "
+                "identifier); parser did not set ScoreResponse.iteration"
+            )
+        if not day:
+            raise ValueError(
+                "record_user_score requires a day — the date the score was "
+                "logged (reference only, but still stored on every row)"
+            )
 
         await self.connection.execute(
-            "INSERT INTO user_scores (guild_id, user_id, user_name, game, day, score, meta) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(guild_id, user_id, game, day) DO UPDATE SET "
+            "INSERT INTO user_scores "
+            "(guild_id, user_id, user_name, game, iteration, score, meta, day) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id, user_id, game, iteration) DO UPDATE SET "
             "score = excluded.score, user_name = excluded.user_name, "
-            "meta = excluded.meta, created_at = CURRENT_TIMESTAMP",
+            "meta = excluded.meta, day = excluded.day, "
+            "created_at = CURRENT_TIMESTAMP",
             (
                 str(guild_id),
                 str(user_id),
                 user_name,
                 game,
-                day,
+                iteration,
                 score,
                 json.dumps(meta) if meta else None,
+                day,
             ),
         )
         await self.connection.commit()
@@ -148,10 +232,13 @@ class DatabaseManager:
         self,
         guild_id: int,
         game: str | None = None,
-        day: str | None = None,
-        end_day: str | None = None,
     ) -> list[ScoreRecord]:
-        """Fetch leaderboard rows for a guild, optionally filtered by game and/or date."""
+        """Fetch each game's MOST RECENT iteration rows for a guild.
+
+        Scores are keyed by the game's own puzzle iteration, so the "current"
+        board is the latest iteration of every game that has been played.
+        Optionally filter to a single *game*.
+        """
         from parsers.base import ScoreRecord  # avoid circular at module level
 
         conditions = ["guild_id = ?"]
@@ -159,28 +246,42 @@ class DatabaseManager:
         if game:
             conditions.append("game = ?")
             params.append(game)
-        if day and end_day:
-            conditions.append("day BETWEEN ? AND ?")
-            params.extend([day, end_day])
-        elif day or end_day:
-            conditions.append("day = ?")
-            params.append(day or end_day)
 
-        where = " AND ".join(conditions)
         cursor = await self.connection.execute(
-            f"SELECT user_id, user_name, game, day, score, meta "
-            f"FROM user_scores WHERE {where} ORDER BY game, score",
+            f"SELECT DISTINCT game, iteration FROM user_scores "
+            f"WHERE {' AND '.join(conditions)}",
             params,
         )
-        rows = await cursor.fetchall()
+        pairs = await cursor.fetchall()
+
+        latest: dict[str, str] = {}
+        for pair_game, iteration in pairs:
+            if (
+                pair_game not in latest
+                or _iteration_key(iteration) > _iteration_key(latest[pair_game])
+            ):
+                latest[pair_game] = iteration
+
+        if not latest:
+            return []
+
+        placeholders = ", ".join("(?, ?)" for _ in latest)
+        rows = await self.connection.execute(
+            f"SELECT user_id, user_name, game, iteration, day, score, meta "
+            f"FROM user_scores WHERE guild_id = ? "
+            f"AND (game, iteration) IN ({placeholders}) ORDER BY game",
+            [str(guild_id)] + [item for pair in latest.items() for item in pair],
+        )
+        results = await rows.fetchall()
         return [
             ScoreRecord(
                 user_id=int(row[0]),
                 user_name=row[1],
                 game=row[2],
-                day=row[3],
-                score=row[4],
-                meta=json.loads(row[5]) if row[5] else None,
+                iteration=row[3],
+                day=row[4],
+                score=row[5],
+                meta=json.loads(row[6]) if row[6] else None,
             )
-            for row in rows
+            for row in results
         ]

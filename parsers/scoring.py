@@ -99,6 +99,7 @@ def _average_per_player(records: list[ScoreRecord]) -> list[ScoreRecord]:
                 user_id=user_id,
                 user_name=template.user_name,
                 game=template.game,
+                iteration=template.iteration,
                 day=template.day,
                 score=round(total / counts[user_id], 2),
                 meta=template.meta,
@@ -120,6 +121,7 @@ def _count_per_player(records: list[ScoreRecord]) -> list[ScoreRecord]:
             user_id=user_id,
             user_name=first[user_id].user_name,
             game=first[user_id].game,
+            iteration=first[user_id].iteration,
             day=first[user_id].day,
             score=count,
             meta=first[user_id].meta,
@@ -132,22 +134,22 @@ def _wins_per_player(
     records: list[ScoreRecord],
     orders: _SortOrders,
 ) -> list[ScoreRecord]:
-    """One row per player holding how many days they finished first."""
-    best_per_day: dict[str, float] = {}
+    """One row per player holding how many iterations they finished first."""
+    best_per_iteration: dict[str, float] = {}
     for record in records:
         score = record.score
-        best = best_per_day.get(record.day)
+        best = best_per_iteration.get(record.iteration)
         if best is None or (
             score > best
             if orders.get(record.game, "asc") == "desc"
             else score < best
         ):
-            best_per_day[record.day] = score
+            best_per_iteration[record.iteration] = score
 
     wins: dict[int, int] = {}
     first: dict[int, ScoreRecord] = {}
     for record in records:
-        if record.score == best_per_day[record.day]:
+        if record.score == best_per_iteration[record.iteration]:
             wins[record.user_id] = wins.get(record.user_id, 0) + 1
         first.setdefault(record.user_id, record)
 
@@ -156,6 +158,7 @@ def _wins_per_player(
             user_id=user_id,
             user_name=first[user_id].user_name,
             game=first[user_id].game,
+            iteration=first[user_id].iteration,
             day=first[user_id].day,
             score=wins[user_id],
             meta=first[user_id].meta,
@@ -216,33 +219,36 @@ def resolve_metric(metric: str | None) -> str | None:
     return None
 
 
+def _latest_recorded_day(records: list[ScoreRecord]) -> str | None:
+    """The most recent date any of *records* was logged (headings only).
+
+    Shown so each game heading carries the date the latest score was
+    recorded for that iteration — for reference, never as a sort key.
+    """
+    return max((r.day for r in records), default=None)
+
+
 def build_scoreboard_embed(
     records: list[ScoreRecord],
     *,
     game: str | None = None,
-    day: str | None = None,
     title: str | None = None,
     color: int = 0x2F3136,
     sort_orders: _SortOrders | None = None,
     guild: discord.Guild | None = None,
 ) -> discord.Embed:
-    """Return a Discord embed representing a game leaderboard."""
+    """Return a Discord embed of each game's most recent iteration scores."""
     orders = sort_orders or {}
     name = partial(_display_name, guild=guild)
 
     if not records:
-        heading = day or "all time"
         label = game.title() if game else "Scores"
-        return _empty_embed(title or f"{_TROPHY} {label} — {heading}", color)
-
-    date_label = day or (
-        records[0].day if len(set(r.day for r in records)) == 1 else "all time"
-    )
+        return _empty_embed(title or f"{_TROPHY} {label}", color)
 
     # Single-game view
     if game:
         if not title:
-            title = f"{_TROPHY} {game.title()} — {date_label}"
+            title = f"{_TROPHY} {game.title()} · {_latest_recorded_day(records)}"
         ranked = _ranked(records, orders, name)
         lines = [
             f"**{i}.** {name(r)} — **{format_score(r.score)}**"
@@ -254,16 +260,21 @@ def build_scoreboard_embed(
         )
         return embed
 
-    # Multi-game view: one field per game
+    # Multi-game view: one field per game, headed by the date the latest
+    # score was recorded for that iteration.
     if not title:
-        title = f"{_TROPHY} Scores — {date_label}"
+        title = f"{_TROPHY} Latest Scores"
     embed = discord.Embed(title=title, color=color)
 
     grouped = _group_by_game(records)
     for game_name in sorted(grouped):
         game_records = _ranked(grouped[game_name], orders, name)
         lines = [f"{name(r)} — **{format_score(r.score)}**" for r in game_records]
-        embed.add_field(name=game_name.title(), value="\n".join(lines), inline=True)
+        embed.add_field(
+            name=f"{game_name.title()} · {_latest_recorded_day(grouped[game_name])}",
+            value="\n".join(lines),
+            inline=True,
+        )
 
     embed.set_footer(
         text=f"{len(records)} score{'s' if len(records) != 1 else ''} recorded "
@@ -276,15 +287,13 @@ def build_leaderboard_embed(
     records: list[ScoreRecord],
     *,
     game: str | None = None,
-    day: str | None = None,
-    end_day: str | None = None,
     title: str | None = None,
     color: int = 0x2F3136,
     sort_orders: _SortOrders | None = None,
     guild: discord.Guild | None = None,
     metric: str = DEFAULT_METRIC,
 ) -> discord.Embed:
-    """Return an embed showing the top 3 players for each game."""
+    """Return an embed showing the top 3 players for each game's latest iteration."""
     if metric not in METRIC_LABELS:
         raise ValueError(f"Unknown leaderboard metric: {metric!r}")
     orders = sort_orders or {}
@@ -295,44 +304,30 @@ def build_leaderboard_embed(
         rank_orders = orders
     name = partial(_display_name, guild=guild)
 
-    if day and end_day:
-        window_label = f"{day} – {end_day}"
-    elif day or end_day:
-        window_label = day or end_day
-    else:
-        window_label = "all time"
-
     label = game.title() if game else "Leaderboard"
-    title = title or f"{_TROPHY} {label} — {window_label}"
+    title = title or f"{_TROPHY} {label} — latest iteration"
 
     if not records:
         return _empty_embed(title, color)
 
     embed = discord.Embed(title=title, color=color)
     grouped = _group_by_game(records)
-
-    # The `top` metric keeps the original record, so each row's day is when
-    # that best score was set — show it. The other metrics aggregate across
-    # days (mean, wins, plays), so a per-row date would be meaningless.
-    show_day = metric == "top"
-
     for game_name in sorted(grouped):
         aggregated = _aggregate_per_player(grouped[game_name], orders, metric)
         top = _ranked(aggregated, rank_orders, name)[:3]
         lines = []
         for i, r in enumerate(top, 1):
-            date = f" · {r.day}" if show_day else ""
             if i == 1:
                 lines.append(
-                    f"{_CROWN} **{name(r)}** — **{format_score(r.score)}**{date}"
+                    f"{_CROWN} **{name(r)}** — **{format_score(r.score)}**"
                 )
             else:
                 lines.append(
-                    f"{i}. **{name(r)}** — **{format_score(r.score)}**{date}"
+                    f"{i}. **{name(r)}** — **{format_score(r.score)}**"
                 )
         embed.add_field(name=game_name.title(), value="\n".join(lines), inline=True)
 
     embed.set_footer(
-        text=f"{METRIC_LABELS[metric]} · top 3 per game · {window_label}"
+        text=f"{METRIC_LABELS[metric]} · top 3 per game · latest iteration"
     )
     return embed

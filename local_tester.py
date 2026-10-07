@@ -19,7 +19,7 @@ import discord
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from database import DatabaseManager  # noqa: E402
+from database import DatabaseManager, migrate_user_scores_schema  # noqa: E402
 from parsers.base import ScoreParser  # noqa: E402
 from parsers.dispatch import select_parser  # noqa: E402
 from parsers.registry import discover_parsers  # noqa: E402
@@ -28,7 +28,6 @@ from parsers.scoring import (  # noqa: E402
     build_scoreboard_embed,
     resolve_metric,
 )
-from timeutil import today_str  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
@@ -236,8 +235,8 @@ async def run_input(
         score = "—" if response.score is None else response.score
         print(f"  Parsed by: {type(parser).__name__}  (game: '{parser.game}')")
         print(
-            f"  → recorded {player} · {response.day} · "
-            f"score={score}"
+            f"  → recorded {player} · iteration {response.iteration or '—'} · "
+            f"{response.day} · score={score}"
             f"{'  ·  ' + str(response.meta) if response.meta else ''}"
         )
 
@@ -256,6 +255,7 @@ async def run_input(
 async def open_db(path: Path) -> DatabaseManager:
     """Open (creating if needed) the local score database."""
     connection = await aiosqlite.connect(str(path))
+    await migrate_user_scores_schema(connection)
     schema = PROJECT_ROOT / "database" / "schema.sql"
     await connection.executescript(schema.read_text(encoding="utf-8"))
     await connection.commit()
@@ -387,8 +387,8 @@ def build_cli() -> argparse.ArgumentParser:
         default=None,
         metavar="GAME",
         dest="scores_game",
-        help="Show the leaderboard (same embed as !scores). Pass a game "
-             "name to filter, or omit for all games.",
+        help="Show each game's most recent iteration (same embed as !scores). "
+             "Pass a game name to filter, or omit for all games.",
     )
     ap.add_argument(
         "--leaderboard",
@@ -397,8 +397,9 @@ def build_cli() -> argparse.ArgumentParser:
         default=None,
         metavar="GAME",
         dest="leaderboard_game",
-        help="Show the top-3-per-game leaderboard (same embed as !leaderboard). "
-             "Pass a game name to filter, or omit for all games.",
+        help="Show the top-3-per-game leaderboard for the latest iteration "
+             "(same embed as !leaderboard). Pass a game name to filter, or "
+             "omit for all games.",
     )
     ap.add_argument(
         "--metric",
@@ -408,22 +409,6 @@ def build_cli() -> argparse.ArgumentParser:
         help="How to rank players: `average` (mean score, default), `top` "
              "(best single score), `wins` (first-place finishes), or `count` "
              "(games played).",
-    )
-    ap.add_argument(
-        "--day",
-        type=str,
-        metavar="YYYY-MM-DD",
-        default=None,
-        help="Start date (or single date) used with --scores / --leaderboard "
-             "(default for --scores: today; for --leaderboard: all time).",
-    )
-    ap.add_argument(
-        "--end",
-        type=str,
-        metavar="YYYY-MM-DD",
-        default=None,
-        help="End date forming an inclusive range with --day (used with "
-             "--leaderboard most naturally; default: single date / all time).",
     )
     return ap
 
@@ -436,11 +421,10 @@ async def amain(args: argparse.Namespace, parsers: list[ScoreParser]) -> None:
         # ── Score leaderboard mode (mirrors !scores command) ──────────
         if args.scores_game is not None:
             game = args.scores_game or None  # "" → None (all games)
-            day = args.day or today_str()
-            records = await db.get_scores(guild_id=3000, game=game, day=day)
+            records = await db.get_scores(guild_id=3000, game=game)
             sort_orders = {p.game: p.score_sort for p in parsers}
             embed = build_scoreboard_embed(
-                records, game=game, day=day, sort_orders=sort_orders
+                records, game=game, sort_orders=sort_orders
             )
             print(render_embed(embed))
             return
@@ -448,18 +432,12 @@ async def amain(args: argparse.Namespace, parsers: list[ScoreParser]) -> None:
         # ── Top-3-per-game leaderboard mode (mirrors !leaderboard) ─────
         if args.leaderboard_game is not None:
             game = args.leaderboard_game or None  # "" → None (all games)
-            day = args.day or None  # None → all time
-            end = args.end or None
             metric = resolve_metric(args.metric) or "average"
-            records = await db.get_scores(
-                guild_id=3000, game=game, day=day, end_day=end
-            )
+            records = await db.get_scores(guild_id=3000, game=game)
             sort_orders = {p.game: p.score_sort for p in parsers}
             embed = build_leaderboard_embed(
                 records,
                 game=game,
-                day=day,
-                end_day=end,
                 sort_orders=sort_orders,
                 metric=metric,
             )

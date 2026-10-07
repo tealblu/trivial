@@ -8,7 +8,17 @@ from .base import ScoreParser, ScoreResponse
 
 
 class KrillionScoreParser(ScoreParser):
-    """Parser for Krillion daily scores."""
+    """Parser for Krillion daily scores.
+
+    Example score message (see ``example_message``): the puzzle number in the
+    header ("Krillion #64") is the iteration — everything is keyed off it, not
+    the date the share was posted.
+    """
+
+    # A full pasted share — the header carries the iteration number.
+    example_message = """Krillion #64
+
+8700"""
 
     game = "krillion"
     score_sort = "desc"  # higher score is better
@@ -43,7 +53,9 @@ class KrillionScoreParser(ScoreParser):
             and not self._header_re.search(line)
         ]
 
-        resp = self._build_response(message, title="Krillion", score=score)
+        resp = self._build_response(
+            message, title="Krillion", score=score, iteration=number
+        )
         if number:
             resp.meta["number"] = number
 

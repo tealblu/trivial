@@ -3,9 +3,13 @@
 </p>
 
 **trivial** is a Discord bot that automatically tracks game scores from chat
-messages. When a user posts their daily score, trivial remembers the score. The `!scores` command can be used to display scores that trivial remembered.
+messages. When a user posts their score, trivial remembers it keyed to that
+game's own puzzle iteration (e.g. Wordle's puzzle number, or a share's own
+date for games that label puzzles that way) — so boards stay correct even
+when games reset or iterate at different times than the bot's calendar. The
+`!scores` command shows the most recent iteration of every game's scores.
 Each day the bot can also post a reminder in the score channel: a list of the
-supported games, yesterday's scoreboard, and every player who played yesterday
+supported games, the latest scores, and every player who played yesterday
 with their current streak of consecutive playing days.
 
 # How to set up
@@ -57,16 +61,13 @@ Make sure `.env` exists with at least `TOKEN` and `PREFIX`.
 
 | Command | Description |
 |---------|-------------|
-| `!/scores` | Today's scores across all games (available to everyone) |
-| `!/scores wordle` | Today's Wordle scores (available to everyone) |
-| `!/scores wordle 2026-09-17` | Wordle scores for a specific date (available to everyone) |
-| `!/leaderboard` | Top 3 players for each game by average score, all time (available to everyone) |
-| `!/leaderboard wordle` | Top 3 Wordle players by average score, all time (available to everyone) |
-| `!/leaderboard wordle top` | Top 3 Wordle players by best single score, with the date of each best score (available to everyone) |
-| `!/leaderboard wordle wins` | Top 3 Wordle players by number of first-place wins (available to everyone) |
-| `!/leaderboard wordle count` | Top 3 Wordle players by number of games played (available to everyone) |
-| `!/leaderboard wordle 2026-09-17` | Top 3 Wordle players for a specific date (available to everyone) |
-| `!/leaderboard 2026-09-01 2026-09-21` | Top 3 players per game across a date range, e.g. a week (available to everyone) |
+| `!/scores` | Each game's most recent iteration of scores (available to everyone) |
+| `!/scores wordle` | Wordle's most recent iteration of scores (available to everyone) |
+| `!/leaderboard` | Top 3 players for each game by average score, latest iteration (available to everyone) |
+| `!/leaderboard wordle` | Top 3 Wordle players by average score, latest iteration (available to everyone) |
+| `!/leaderboard wordle top` | Top 3 Wordle players by best score on the latest iteration (available to everyone) |
+| `!/leaderboard wordle wins` | Top 3 Wordle players by first-place finishes (available to everyone) |
+| `!/leaderboard wordle count` | Top 3 Wordle players by games played (available to everyone) |
 | `!/games` | List every supported game with a link to play (available to everyone) |
 | `!/scorechannel set #channel` | Set the channel trivial monitors for scores (admins only) |
 | `!/scorechannel remove` | Stop monitoring scores in this server (admins only) |
@@ -77,7 +78,7 @@ Make sure `.env` exists with at least `TOKEN` and `PREFIX`.
 | `!/dailyreminder disable` | Disable the daily games reminder (admins only) |
 | `!/dailyreminder time 09:00` | Set the reminder time, 24-hour, in the bot's timezone (admins only) |
 | `!/dailyreminder show` | Show the current reminder settings (admins only) |
-| `!/dailyreminder test` | Preview the daily reminder (plus yesterday's scoreboard and players) in this channel (admins only) |
+| `!/dailyreminder test` | Preview the daily reminder (plus latest scores and players) in this channel (admins only) |
 | `!/sync global` | Re-sync the slash command tree with Discord (bot owner only) |
 | `!/unsync global` | Remove the bot's slash commands (bot owner only) |
 
@@ -89,6 +90,17 @@ Every command above works both as a slash command (`/scores`) and as a prefix co
 ## Adding a new game
 
 "Parsers" are used to extract the game's score from a message. Parsers are auto-discovered from the `parsers/` directory. Adding support for a new game is as simple as dropping in a new file that subclasses `ScoreParser`.
+
+Scores are **keyed by the game's own puzzle iteration**, never the date the
+message was posted. Every concrete parser must set `ScoreResponse.iteration`
+to the puzzle identifier it reads from the share — the puzzle number (e.g.
+Wordle's `1925`, Metazooa's `1153`) or, for games whose share labels the
+puzzle by date (dialed, maptap), the share's own date as `YYYY-MM-DD`. The
+parser file should also carry an `example_message` class attribute: a full
+pasted share containing the iteration number/date, so the format (and its
+iteration) stays documented and testable. The date a score was *logged* is
+still recorded on each row for reference, but nothing is keyed or ranked off
+it.
 
 ## Local testing
 
@@ -125,11 +137,10 @@ Other flags:
 
 ```
 python local_tester.py --list                          # Show discovered parsers
-python local_tester.py --scores wordle --day 2026-09-17
-python local_tester.py --leaderboard wordle            # Top-3-per-game leaderboard (all time)
-python local_tester.py --leaderboard wordle --metric top  # Rank by best single score
-python local_tester.py --leaderboard wordle --metric wins # Rank by first-place wins
-python local_tester.py --leaderboard --day 2026-09-01 --end 2026-09-21
+python local_tester.py --scores wordle                 # Latest iteration of wordle (same embed as !scores)
+python local_tester.py --leaderboard wordle            # Top-3-per-game leaderboard (latest iteration)
+python local_tester.py --leaderboard wordle --metric top  # Rank by best score
+python local_tester.py --leaderboard wordle --metric wins # Rank by first-place finishes
 python local_tester.py -f inputs.txt --verbose
 python local_tester.py -f inputs.txt --db out/test.db  # Custom DB path
 ```

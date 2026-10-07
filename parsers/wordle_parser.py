@@ -9,15 +9,21 @@ from .base import ScoreParser, ScoreResponse
 
 class WordleScoreParser(ScoreParser):
     """Parser for a pasted Wordle share.
-        Wordle 1925 4/6
 
-        ⬛⬛⬛⬛🟨
-        ⬛🟩⬛⬛⬛
-        🟩🟩⬛⬛🟨
-        🟩🟩⬛⬛🟨
-        🟩🟩⬛⬛🟨
-        ⬜⬜⬜⬜⬜
+    Example score message (see ``example_message``): the puzzle number in the
+    header ("Wordle 1925") is the iteration — everything is keyed off it, not
+    the date the share was posted.
     """
+
+    # A full pasted share — the header carries the iteration number.
+    example_message = """Wordle 1925 4/6
+
+⬛⬛⬛⬛🟨
+⬛🟩⬛🟨⬛
+🟩🟩⬛⬛🟨
+🟩🟩🟩🟩🟩
+⬜⬜⬜⬜⬜
+⬜⬜⬜⬜⬜"""
 
     game = "wordle"
     score_sort = "asc"  # fewer guesses is better
@@ -50,7 +56,12 @@ class WordleScoreParser(ScoreParser):
         if not score:
             score = int(total) if guesses == "X" else int(guesses)
 
-        resp = self._build_response(message, title="Wordle", score=score)
+        resp = self._build_response(
+            message,
+            title="Wordle",
+            score=score,
+            iteration=number.replace(",", ""),
+        )
         resp.meta.update(
             number=number.replace(",", ""),
             guesses=guesses,

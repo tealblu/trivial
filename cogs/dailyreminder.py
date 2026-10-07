@@ -64,7 +64,7 @@ def _lines_to_embeds(
 
 
 class DailyReminder(commands.Cog, name="dailyreminder"):
-    """Sends a daily reminder with links, yesterday's scoreboard and players."""
+    """Sends a daily reminder with links, latest scores and players."""
 
     def __init__(self, bot: TrivialBot) -> None:
         self.bot = bot
@@ -159,19 +159,15 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         embed.set_footer(text=f"Daily reminder · {now_label()}")
         return embed
 
-    async def build_yesterday_scoreboard_embed(
+    async def build_latest_scoreboard_embed(
         self, guild_id: int, guild: discord.Guild | None = None
     ) -> discord.Embed:
-        """Build the previous day's scoreboard embed for *guild_id*."""
-        yesterday = yesterday_str()
-        records = await self.bot.database.get_scores(
-            guild_id=guild_id, day=yesterday
-        )
+        """Build an embed of each game's most recent iteration for *guild_id*."""
+        records = await self.bot.database.get_scores(guild_id=guild_id)
         sort_orders = {parser.game: parser.score_sort for parser in self.parsers}
         return build_scoreboard_embed(
             records,
-            day=yesterday,
-            title="📊 Yesterday's Scoreboard",
+            title="📊 Latest Scores",
             color=0xBEBEFE,
             sort_orders=sort_orders,
             guild=guild,
@@ -229,7 +225,7 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         """The complete daily reminder as a list of embeds."""
         return [
             self.build_reminder_embed(channel),
-            await self.build_yesterday_scoreboard_embed(guild_id, guild=guild),
+            await self.build_latest_scoreboard_embed(guild_id, guild=guild),
             *await self.build_yesterday_players_embeds(guild_id, guild=guild),
         ]
 
