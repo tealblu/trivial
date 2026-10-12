@@ -2,8 +2,23 @@
   <img src="resources/triviala.png" alt="Trivial logo" width="150">
 </p>
 
-**trivial** is a Discord bot that automatically tracks game scores from chat
+**trivial** is a Discord bot that automatically tracks daily game scores from chat
 messages. When a user posts their score, trivial remembers it. It's that simple! Ask trivial to show you scores for a certain day, and it will. A daily reminder feature lets you remind your friends to keep playing!
+
+# Supported games
+
+| Game | Play |
+|------|------|
+| Catfishing | [catfishing.net](https://catfishing.net) |
+| Dialed | [dialed.gg](https://dialed.gg/color) |
+| Krillion | [krillion.io](https://krillion.io) |
+| Maptap | [maptap.gg](https://www.maptap.gg) |
+| Metaflora | [flora.metazooa.com](https://flora.metazooa.com) |
+| Metazooa | [metazooa.com](https://metazooa.com) |
+| Poople | [poople.io](https://poople.io) |
+| Wordle | [nytimes.com](https://www.nytimes.com/games/wordle/index.html) |
+
+Every supported game is also listed in Discord with `!/games`.
 
 # How to set up
 0. Set up a new bot in the [discord developer portal](https://discord.com/developers/home).
@@ -95,6 +110,9 @@ pasted share containing the iteration number/date, so the format (and its
 iteration) stays documented and testable. The date a score was *logged* is
 still recorded on each row for reference, but nothing is keyed or ranked off
 it.
+
+> **Remember the docs:** when you add a new parser, also add the game to the
+> [Supported games](#supported-games) table near the top of this README.
 
 ## Local testing
 
