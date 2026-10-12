@@ -56,16 +56,28 @@ def discover_parsers() -> list[ScoreParser]:
     return [cls() for cls in _parser_classes()]
 
 
+def _visible_parsers(
+    parsers: list[ScoreParser] | None = None,
+) -> list[ScoreParser]:
+    """Non-hidden parsers, sorted by game id for stable listings."""
+    games = [parser for parser in parsers or discover_parsers() if not parser.hidden]
+    games.sort(key=lambda parser: parser.game)
+    return games
+
+
+def _display_host(url: str) -> str:
+    """Host of *url* for display, stripping a leading ``www.``."""
+    host = urlparse(url).netloc or url
+    return host[4:] if host.startswith("www.") else host
+
+
 def build_game_link_lines(
     parsers: list[ScoreParser] | None = None,
 ) -> list[str]:
     """Build the user-facing list of supported games and their links.
     """
-    games = [parser for parser in parsers or discover_parsers() if not parser.hidden]
-    games.sort(key=lambda parser: parser.game)
-
     lines: list[str] = []
-    for parser in games:
+    for parser in _visible_parsers(parsers):
         name = parser.game.title()
         if parser.game_url:
             host = urlparse(parser.game_url).netloc or parser.game_url
@@ -74,3 +86,26 @@ def build_game_link_lines(
             logger.warning("Parser %s has no game_url", type(parser).__name__)
             lines.append(f"• **{name}**")
     return lines
+
+
+def build_game_table_markdown(
+    parsers: list[ScoreParser] | None = None,
+) -> str:
+    """Markdown for the README's "Supported games" table.
+
+    Generates the two-column ``| Game | Play |`` table from the discovered
+    parsers so the docs stay in sync with the code. Hidden parsers (e.g. the
+    example skeleton) are excluded, exactly like the Discord listings, and a
+    parser without a ``game_url`` gets an empty Play cell plus a warning.
+    """
+    rows = ["| Game | Play |", "|------|------|"]
+    for parser in _visible_parsers(parsers):
+        name = parser.game.title()
+        if parser.game_url:
+            rows.append(
+                f"| {name} | [{_display_host(parser.game_url)}]({parser.game_url}) |"
+            )
+        else:
+            logger.warning("Parser %s has no game_url", type(parser).__name__)
+            rows.append(f"| {name} | |")
+    return "\n".join(rows)

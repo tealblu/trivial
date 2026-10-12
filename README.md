@@ -111,9 +111,6 @@ iteration) stays documented and testable. The date a score was *logged* is
 still recorded on each row for reference, but nothing is keyed or ranked off
 it.
 
-> **Remember the docs:** when you add a new parser, also add the game to the
-> [Supported games](#supported-games) table near the top of this README.
-
 ## Local testing
 
 You can exercise the full parsing and score-recording pipeline without

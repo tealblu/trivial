@@ -1,6 +1,10 @@
 from .base import ScoreParser, ScoreRecord, ScoreResponse
 from .dispatch import select_parser
-from .registry import discover_parsers, build_game_link_lines
+from .registry import (
+    build_game_link_lines,
+    build_game_table_markdown,
+    discover_parsers,
+)
 from .scoring import (
     DEFAULT_METRIC,
     METRIC_ALIASES,
@@ -20,6 +24,7 @@ __all__ = [
     "build_leaderboard_embed",
     "build_scoreboard_embed",
     "build_game_link_lines",
+    "build_game_table_markdown",
     "resolve_metric",
     "select_parser",
 ]
