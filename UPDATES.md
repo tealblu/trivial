@@ -2,6 +2,11 @@
 
 Here is the list of all the updates that I made on this template.
 
+> This changelog is inherited from the upstream
+> [Python Discord Bot Template](https://github.com/kkrypt0nn/Python-Discord-Bot-Template).
+> trivial tracks a newer `discord.py` than the template's last release listed
+> below — `requirements.txt` is the source of truth for pinned versions.
+
 ### Version 6.5.0 (23 January 2026)
 
 - Pin `discord.py` version to `2.6.4`

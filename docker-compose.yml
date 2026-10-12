@@ -1,22 +1,14 @@
 services:
-  discord-bot:
-    # Pull the published image from GHCR, or build locally with
-    # `docker compose up -d --build` when GHCR_OWNER is unset.
+  trivial:
     image: ghcr.io/${GHCR_OWNER:-your-github-user}/scoreboard-bot:latest
     build: .
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      # Keep the database and logs in the mounted data volume.
       DATABASE_PATH: /bot/data/database.db
       DISCORD_LOG_PATH: /bot/data/discord.log
 
-    # Alternatively you can set the environment variables as such:
-    # /!\ The token shouldn't be written here, as this file is not ignored from Git /!\
-    # environment:
-    #   - PREFIX=YOUR_BOT_PREFIX_HERE
-    #   - INVITE_LINK=YOUR_BOT_INVITE_LINK_HERE
     volumes:
       - bot-data:/bot/data
 

@@ -2,114 +2,138 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
 
+import discord
+
+from timeutil import today_str
+
+from .common import format_score
+
 if TYPE_CHECKING:
-    import discord
     from database import DatabaseManager
 
 
-def _utc_today() -> str:
-    """Today's date as ``YYYY-MM-DD`` (UTC).
-
-    Daily games (Wordle, ...) tie every score to the day it was posted,
-    which is how scores are de-duplicated per user per game.
-    """
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+def message_author_display_name(message: discord.Message) -> str:
+    """Return the author's display name, preferring the server nickname."""
+    author = message.author
+    # A Member exposes the per-server nickname; a plain User does not, so
+    # fall back to the cached member to pick up nicknames like production does.
+    if not isinstance(author, discord.Member) and message.guild is not None:
+        member = message.guild.get_member(author.id)
+        if member is not None:
+            author = member
+    return author.display_name or author.name
 
 
 @dataclass
 class ScoreResponse:
-    """Parsed data for ONE user for ONE game.
-
-    The message model this bot targets is:
-
-        many users x many games — one score per message.
-
-    A message contains a single player's daily result for a single game
-    (e.g. ``Wordle 1,234 4/6``). ``score``, ``day`` and ``meta`` are what
-    get persisted to the database; ``title``/``description``/``fields``/
-    ``footer``/``color`` shape the embed posted to the channel.
-    """
+    """Parsed data for one user for one game."""
 
     title: str = ""
     score: int | None = None  # The value recorded for the user (e.g. guesses)
     game: str = ""  # Falls back to the parser's `game` if left unset
     user_id: int | None = None  # Discord user ID of the scorer
     username: str = ""  # Display name, for logging / embeds
-    day: str = field(default_factory=_utc_today)  # YYYY-MM-DD for this score
+    iteration: str = ""  # The game's own puzzle identifier (e.g. "1925" or "2026-09-18")
+    day: str = field(default_factory=today_str)  # YYYY-MM-DD the score was logged (reference only)
     meta: dict[str, str] = field(default_factory=dict)  # e.g. {"number": "1234", "mode": "hard"}
-    # Legacy multi-player fallback — most parsers leave this empty.
-    scores: dict[str, int] = field(default_factory=dict)
     description: str | None = None
     color: int = 0x2F3136  # Default Discord dark embed color
-    fields: list[tuple[str, str, bool]] = field(default_factory=list)
-    footer: str | None = None
 
 
 @dataclass
 class ScoreRecord:
-    """One row from the ``user_scores`` table — the read-side counterpart to
-    :class:`ScoreResponse`.
-
-    Returned by ``DatabaseManager.get_scores`` and consumed by
-    :func:`parsers.scoring.build_scoreboard_embed` to render the leaderboard.
-    """
+    """One row from the ``user_scores`` table used to render leaderboards."""
 
     user_id: int
     user_name: str
     game: str
-    day: str
-    score: int
+    iteration: str
+    day: str  # date the score was logged (reference only; never keyed)
+    score: int | float
     meta: dict[str, str] | None = None
 
 
 class ScoreParser(ABC):
-    """Base class for game parsers — one parser per game.
-
-    Subclass this for each game (Wordle, MapTap, ...). Each subclass must:
-
-        - set the ``game`` class attribute to a stable identifier, e.g. "wordle"
-        - implement ``can_parse`` / ``parse`` / ``format_response``
-
-    Optionally set ``score_sort`` if lower scores aren't better for this game.
-
-    Scoring persistence is handled by the default ``record_score``
-    implementation; override it only for game-specific storage.
-
-    Parse flow (owned by the dispatcher / cog):
-
-        1. ``select_parser`` picks the parser whose ``can_parse`` matches
-        2. ``parse`` extracts the user's score into a ``ScoreResponse``
-        3. ``record_score`` stores it in the database (one row per
-           guild, user, game, day)
-        4. ``format_response`` turns the response into a Discord embed
-    """
+    """Base class for game parsers — one parser per game."""
 
     game: str = ""
-    # "asc"  = lower score is better  (fewer guesses; Wordle-style)
-    # "desc" = higher score is better (more points; arcade-style)
+    # "asc" = lower is better (fewer guesses); "desc" = higher is better (more points).
     score_sort: Literal["asc", "desc"] = "asc"
+    # Link to the game's website, shown in the daily reminder.
+    game_url: str = ""
+    # Hidden parsers are discovered but excluded from user-facing listings
+    # (e.g. the rotating presence and the daily reminder).
+    hidden: bool = False
 
     @abstractmethod
-    async def can_parse(self, message: discord.Message) -> bool:
-        """Return True if *message* matches this game's score format."""
+    def can_parse(self, message: discord.Message) -> bool:
+        """Return True if the message matches this game's score format."""
         ...
 
     @abstractmethod
-    async def parse(self, message: discord.Message) -> ScoreResponse:
-        """Extract the author's score and return a ScoreResponse.
+    def parse(self, message: discord.Message) -> ScoreResponse:
+        """Extract the author's score and return a ScoreResponse."""
+        ...
 
-        Include ``user_id``/``username`` when the parser can; otherwise
-        ``record_score`` falls back to ``message.author``.
+    def _build_response(
+        self,
+        message: discord.Message,
+        *,
+        title: str,
+        score: int | float | None,
+        iteration: str | None = None,
+        day: str | None = None,
+    ) -> ScoreResponse:
+        """Build a ScoreResponse pre-filled with this game and the author's details.
+
+        :param message: The message the score was extracted from.
+        :param title: Title shown on the response embed, e.g. "Color Daily".
+        :param score: The numeric score for this game/author/iteration.
+        :param iteration: The game's own puzzle identifier — its puzzle number
+            (e.g. "1925") or, for date-labelled shares, the share's own date
+            as ``YYYY-MM-DD``. Required before the score is saved.
+        :param day: Optional log date (``YYYY-MM-DD``); ``None`` keeps today's
+            date. Informational only — never used to key or rank scores.
         """
-        ...
+        resp = ScoreResponse(
+            title=title,
+            score=score,
+            game=self.game,
+            user_id=message.author.id,
+            username=message_author_display_name(message),
+        )
+        if iteration:
+            resp.iteration = iteration
+        if day:
+            resp.day = day
+        return resp
 
-    @abstractmethod
-    async def format_response(self, score_response: ScoreResponse) -> discord.Embed:
-        """Turn a *ScoreResponse* into a Discord embed ready to send."""
-        ...
+    def format_response(self, score_response: ScoreResponse) -> discord.Embed:
+        """Default embed: title, description, a Score field, and author/footer.
+
+        Override for a richer per-game embed (e.g. extra fields from ``meta``).
+        """
+        embed = discord.Embed(
+            title=score_response.title,
+            description=score_response.description,
+            color=score_response.color,
+        )
+        embed.add_field(
+            name="Score", value=format_score(score_response.score), inline=True
+        )
+        # Footer shows the game's own puzzle identifier: its index number
+        # ("#88") or, for date-labelled shares, the parsed date. The date the
+        # score was logged is not shown; fall back to it only when a parser
+        # never set an iteration.
+        iteration = score_response.iteration
+        if iteration.isdigit():
+            iteration = f"#{iteration}"
+        embed.set_footer(
+            text=f"{score_response.username} · {iteration or score_response.day}"
+        )
+        return embed
 
     async def record_score(
         self,
@@ -117,14 +141,7 @@ class ScoreParser(ABC):
         response: ScoreResponse,
         database: DatabaseManager,
     ) -> None:
-        """Persist ONE score for THIS game, tied to the message author.
-
-        One row per (guild, user, game, day): re-posting a daily score
-        for the same day overwrites the previous value.
-
-        Subclasses may override this for game-specific storage (e.g.
-        keeping streaks or extra statistics).
-        """
+        """Persist ONE score for this game, tied to the message author."""
         if not self.game:
             raise ValueError(
                 f"{type(self).__name__} must define a `game` identifier "
@@ -133,9 +150,10 @@ class ScoreParser(ABC):
         await database.record_user_score(
             guild_id=message.guild.id if message.guild else 0,
             user_id=response.user_id or message.author.id,
-            user_name=response.username or message.author.display_name,
+            user_name=response.username or message_author_display_name(message),
             game=self.game,
-            day=response.day,
+            iteration=response.iteration,
             score=response.score,
             meta=response.meta,
+            day=response.day,
         )

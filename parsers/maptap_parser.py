@@ -1,50 +1,63 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
 
 import discord
 
 from .base import ScoreParser, ScoreResponse
+from .common import parse_month_day
 
 
 class MapTapScoreParser(ScoreParser):
     """Parser for www.maptap.gg daily scores.
 
-    Expected message format::
+    Example score message (see ``example_message``): maptap shares identify the
+    puzzle by date, not a number, so that date ("September 17" -> 2026-09-17) is
+    the iteration — everything is keyed off it, not the date the share was posted.
 
         www.maptap.gg September 17
         93🏆 99🎯 98🎯 87🎓 62😐
         Final score: 835
-
-    Only the total score is recorded to the database. Individual round
-    scores (number + emoji) are echoed in the embed for context.
     """
+
+    # A full pasted share — the header's date is the iteration.
+    example_message = """www.maptap.gg September 17
+93🏆 99🎯 98🎯 87🎓 62😐
+Final score: 835"""
 
     game = "maptap"
     score_sort = "desc"  # higher score is better
-
-    _MONTH_NAMES = {name.lower(): idx for idx, name in enumerate(
-        ["January", "February", "March", "April", "May", "June",
-         "July", "August", "September", "October", "November", "December"],
-        start=1,
-    )}
+    game_url = "https://www.maptap.gg"
 
     # Match individual round results like "93🏆" or "87🎓".
     _round_re = re.compile(r"(\d+)\s*([^\s\d]+)")
 
-    async def can_parse(self, message: discord.Message) -> bool:
+    def can_parse(self, message: discord.Message) -> bool:
         # Require the URL AND a "Final score:" line so casual mentions of
         # the site (without an actual score) don't match this parser.
-        return (
-            "www.maptap.gg" in message.content
-            and re.search(r"Final score:\s*\d+", message.content, re.IGNORECASE) is not None
-        )
+        if "www.maptap.gg" not in message.content:
+            return False
+        if re.search(r"Final score:\s*\d+", message.content, re.IGNORECASE) is None:
+            return False
+        # The header must carry the share's own date — that date is the
+        # iteration scores are keyed off, so it can't be optional.
+        lines = message.content.strip().splitlines()
+        return bool(lines) and self._header_date(lines[0]) is not None
 
-    async def parse(self, message: discord.Message) -> ScoreResponse:
+    def _header_date(self, line: str) -> str | None:
+        """The ``YYYY-MM-DD`` puzzle date in a share header line, or None."""
+        first = re.sub(r"www\.maptap\.gg\s*", "", line.strip()).strip().rstrip(".")
+        parts = first.split()
+        if len(parts) != 2:
+            return None
+        try:
+            return parse_month_day(parts[0], int(parts[1]))
+        except ValueError:
+            return None
+
+    def parse(self, message: discord.Message) -> ScoreResponse:
         lines = message.content.strip().splitlines()
 
-        # -- Parse the total score --
         score = None
         for line in reversed(lines):
             m = re.search(r"Final score:\s*(\d+)", line, re.IGNORECASE)
@@ -52,80 +65,18 @@ class MapTapScoreParser(ScoreParser):
                 score = int(m.group(1))
                 break
 
-        # -- Parse the date from the first line --
-        day = None
-        if lines:
-            first = lines[0].strip()
-            # Remove the URL prefix to isolate the date text.
-            first = re.sub(r"www\.maptap\.gg\s*", "", first).strip()
-            day = self._parse_date(first)
+        iteration = self._header_date(lines[0]) if lines else None
 
-        # -- Parse individual round scores --
         rounds: list[str] = []
         for line in lines:
             for match in self._round_re.finditer(line):
                 rounds.append(f"{match.group(1)}{match.group(2)}")
 
-        # -- Build the response --
-        resp = ScoreResponse(
-            title="MapTap",
-            score=score,
-            game=self.game,
-            user_id=message.author.id,
-            username=message.author.display_name,
+        resp = self._build_response(
+            message, title="MapTap", score=score, iteration=iteration
         )
 
-        if day:
-            resp.day = day
-
-        # Show round breakdown in the embed.
         if rounds:
-            resp.description = "\n".join(
-                [" ".join(rounds)] + ([f"*{day}*"] if day else [])
-            )
-        elif day:
-            resp.description = f"*{day}*"
+            resp.description = " ".join(rounds)
 
         return resp
-
-    async def format_response(self, score_response: ScoreResponse) -> discord.Embed:
-        embed = discord.Embed(
-            title=score_response.title,
-            description=score_response.description,
-            color=score_response.color,
-        )
-        embed.add_field(name="Score", value=str(score_response.score), inline=True)
-        embed.set_footer(text=f"{score_response.username} · {score_response.day}")
-        return embed
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def _parse_date(cls, text: str) -> str | None:
-        """Try to parse a date like ``September 17`` into ``YYYY-MM-DD``.
-
-        Uses the current UTC year as a default.
-        """
-        # Strip any trailing timezone info or stray characters.
-        text = text.strip().rstrip(".")
-        parts = text.split()
-        if len(parts) != 2:
-            return None
-
-        month_name, day_str = parts
-        month = cls._MONTH_NAMES.get(month_name.lower())
-        if month is None:
-            return None
-
-        try:
-            day_num = int(day_str)
-        except ValueError:
-            return None
-
-        year = datetime.now(timezone.utc).year
-        try:
-            return datetime(year, month, day_num).strftime("%Y-%m-%d")
-        except ValueError:
-            return None

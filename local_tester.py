@@ -1,29 +1,5 @@
 #!/usr/bin/env python3
-"""
-Lightweight local testing framework for scoreboard parsers.
-
-Run parsers against text input without deploying the Discord bot, and
-see exactly what would happen in production:
-
-    1. select_parser  — decides which parser (game) handles the input
-    2. parse          — the parser extracts the user's score
-    3. record_score   — the score is logged to a local SQLite database
-       (same schema + upsert logic the deployed bot uses)
-    4. format_response— the embed is rendered as terminal text
-
-Parsers are auto-discovered from the parsers/ package.
-
-Usage:
-    Interactive:  python local_tester.py
-    Single input: python local_tester.py -p "Wordle 1,234 4/6"
-    File mode:    python local_tester.py -f inputs.txt
-    File (split): python local_tester.py -f multi.txt -d "---"
-
-Flags:
-    --list        Show discovered parsers and exit
-    --verbose     Show dispatch decisions per parser
-    --db PATH     Where to record scores (default: ./local_test.db)
-"""
+"""Lightweight local testing framework for scoreboard parsers."""
 
 from __future__ import annotations
 
@@ -33,30 +9,37 @@ import logging
 import re
 import sys
 import textwrap
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
 import aiosqlite
 import discord
 
-# ---------------------------------------------------------------------------
-# Project root on sys.path so `parsers` / `database` import standalone
-# ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from database import DatabaseManager  # noqa: E402
-from parsers.base import ScoreParser, _utc_today  # noqa: E402
+from database import DatabaseManager, migrate_user_scores_schema  # noqa: E402
+from parsers.base import ScoreParser  # noqa: E402
 from parsers.dispatch import select_parser  # noqa: E402
 from parsers.registry import discover_parsers  # noqa: E402
-from parsers.scoring import build_scoreboard_embed  # noqa: E402
+from parsers.scoring import (  # noqa: E402
+    build_day_scoreboard_embed,
+    build_leaderboard_embed,
+    build_scoreboard_embed,
+    resolve_metric,
+)
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
-# A line like "@Alice:1001 :: Wordle 1,234 4/6" lets test inputs come from
-# a specific simulated user (name:id). The parser only ever sees the payload.
+# Format "@Alice:1001 :: Wordle 1,234 4/6" lets test inputs come from
+# a specific simulated user (display name / nickname:user id).
+#
+# To simulate a server nickname that differs from the user's global name:
+#   @Nickname~Global Name:1001 :: Wordle 1,234 4/6
 _AUTHOR_PREFIX = re.compile(
-    r"^@(?P<name>[^:]+):(?P<uid>\d+)\s*::\s*(?P<content>.*)$"
+    r"^@(?P<nick>[^:~]+)(?:~(?P<name>[^:]+))?:(?P<uid>\d+)\s*::\s*(?P<content>.*)$",
+    re.DOTALL,
 )
 
 
@@ -64,30 +47,36 @@ def split_author(text: str) -> tuple[MockUser | None, str]:
     """If *text* starts with an author prefix, return (MockUser, payload)."""
     m = _AUTHOR_PREFIX.match(text)
     if m:
+        nick = m.group("nick")
+        name = m.group("name") or nick
         return (
-            MockUser(name=m.group("name"), uid=int(m.group("uid"))),
+            MockUser(name=name, uid=int(m.group("uid")), nick=nick),
             m.group("content"),
         )
     return None, text
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Mock Discord objects — lightweight stand-ins so parsers never need the bot
-# ═══════════════════════════════════════════════════════════════════════════
 
 
 class MockUser:
     """Stand-in for discord.Member / discord.User."""
 
-    def __init__(self, name: str = "TestUser", uid: int = 1000) -> None:
+    def __init__(
+        self,
+        name: str = "TestUser",
+        uid: int = 1000,
+        nick: str | None = None,
+    ) -> None:
         self.id = uid
         self.name = name
-        self.display_name = name
+        self.nick = nick
+        self.display_name = nick or name
         self.discriminator = "0000"
         self.bot = False
         self.mention = f"<@{uid}>"
 
     def __str__(self) -> str:
-        return self.name
+        return self.display_name
 
 
 class MockChannel:
@@ -113,17 +102,17 @@ class MockGuild:
     def __init__(self, name: str = "Test Server", gid: int = 3000) -> None:
         self.id = gid
         self.name = name
+        self.members: dict[int, MockUser] = {}
+
+    def get_member(self, user_id: int) -> MockUser | None:
+        return self.members.get(user_id)
 
     def __str__(self) -> str:
         return self.name
 
 
 class MockMessage:
-    """Stand-in for discord.Message.
-
-    Exposes the attributes that parsers are most likely to read.
-    Extend this if a new parser touches more of the message API.
-    """
+    """Stand-in for discord.Message."""
 
     def __init__(
         self,
@@ -148,12 +137,10 @@ class MockMessage:
         self.reference: object | None = None
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Embed → terminal renderer
-# ═══════════════════════════════════════════════════════════════════════════
 
 _BAR = "─" * 54
-_DBL  = "═" * 54
+_DBL = "═" * 54
 
 
 def _color_hex(c: discord.Colour | None) -> str:
@@ -181,12 +168,11 @@ def render_embed(embed: discord.Embed) -> str:
             parts.append(textwrap.indent(textwrap.fill(line, 50), "  "))
 
     # Author
-    author = getattr(embed, "author", None)
-    if author and getattr(author, "name", None):
+    if embed.author and embed.author.name:
         parts.append(_BAR)
-        parts.append(f"  Author: {author.name}")
-        if getattr(author, "url", None):
-            parts.append(f"         {author.url}")
+        parts.append(f"  Author: {embed.author.name}")
+        if embed.author.url:
+            parts.append(f"         {embed.author.url}")
 
     # Color
     if embed.color and embed.color.value:
@@ -202,29 +188,23 @@ def render_embed(embed: discord.Embed) -> str:
             parts.append(textwrap.indent(textwrap.fill(line, 48), "    "))
 
     # Footer
-    footer_obj = getattr(embed, "footer", None)
-    footer_text = getattr(footer_obj, "text", None) if footer_obj else None
-    if footer_text:
+    if embed.footer and embed.footer.text:
         parts.append(_BAR)
-        parts.append(f"  Footer: {footer_text}")
+        parts.append(f"  Footer: {embed.footer.text}")
 
     # Image / Thumbnail
-    img = getattr(embed, "image", None)
-    if img and getattr(img, "url", None):
+    if embed.image and embed.image.url:
         parts.append(_BAR)
-        parts.append(f"  Image: {img.url}")
-    thumb = getattr(embed, "thumbnail", None)
-    if thumb and getattr(thumb, "url", None):
+        parts.append(f"  Image: {embed.image.url}")
+    if embed.thumbnail and embed.thumbnail.url:
         parts.append(_BAR)
-        parts.append(f"  Thumbnail: {thumb.url}")
+        parts.append(f"  Thumbnail: {embed.thumbnail.url}")
 
     parts.append(_DBL)
     return "\n".join(parts)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Parser pipeline — mirrors cogs/scoreboard.py exactly
-# ═══════════════════════════════════════════════════════════════════════════
 
 
 async def run_input(
@@ -232,56 +212,51 @@ async def run_input(
     parsers: list[ScoreParser],
     db: DatabaseManager,
     verbose: bool = False,
-) -> bool:
-    """Feed *text* through the production pipeline. Returns True on a match.
-
-    An optional ``@Name:id ::`` prefix on *text* simulates a different
-    author so multi-user scenarios can be tested.
-    """
+) -> None:
+    """Feed *text* through the parsing pipeline and print what trivial would do."""
     author, payload = split_author(text)
     msg = MockMessage(content=payload, author=author)
+    # Register the author in the guild's member cache so nickname
+    # resolution via guild.get_member works exactly like production.
+    if author is not None:
+        msg.guild.members[author.id] = author
 
-    # 1. Decide which parser handles this input
-    parser = await select_parser(parsers, msg)
+    parser = select_parser(parsers, msg)
     if parser is None:
         if verbose:
             print("  → dispatch: no parser matched")
-        return False
+        print("  ⚠  No parser matched this input.")
+        return
 
-    # 2-4. Parse → record → format
     try:
-        response = await parser.parse(msg)
+        response = parser.parse(msg)
         await parser.record_score(msg, response, db)
 
         player = response.username or msg.author.display_name
         score = "—" if response.score is None else response.score
         print(f"  Parsed by: {type(parser).__name__}  (game: '{parser.game}')")
         print(
-            f"  → recorded {player} · {response.day} · "
-            f"score={score}"
+            f"  → recorded {player} · iteration {response.iteration or '—'} · "
+            f"{response.day} · score={score}"
             f"{'  ·  ' + str(response.meta) if response.meta else ''}"
         )
 
-        embed = await parser.format_response(response)
+        embed = parser.format_response(response)
         print()
         print(render_embed(embed))
-        return True
     except Exception as exc:
         print(f"  [!] {type(parser).__name__} raised {type(exc).__name__}: {exc}")
         if verbose:
-            import traceback
             traceback.print_exc()
-        return False
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Local database + input modes
-# ═══════════════════════════════════════════════════════════════════════════
 
 
 async def open_db(path: Path) -> DatabaseManager:
     """Open (creating if needed) the local score database."""
     connection = await aiosqlite.connect(str(path))
+    await migrate_user_scores_schema(connection)
     schema = PROJECT_ROOT / "database" / "schema.sql"
     await connection.executescript(schema.read_text(encoding="utf-8"))
     await connection.commit()
@@ -318,8 +293,7 @@ async def file_mode(
         print(f"── Input #{i} {'─' * 44}")
         print(f"  {text}")
         print()
-        if not await run_input(text, parsers, db, verbose):
-            print("  ⚠  No parser matched this input.")
+        await run_input(text, parsers, db, verbose)
         print()
 
 
@@ -328,7 +302,7 @@ async def interactive_mode(
     db: DatabaseManager,
     verbose: bool,
 ) -> None:
-    """REPL — type messages, see what the bot would post and record."""
+    """REPL — type messages, see what trivial would post and record."""
     print()
     print("┌──────────────────────────────────────────────────────┐")
     print("│         Local Parser Tester  (interactive mode)      │")
@@ -356,20 +330,17 @@ async def interactive_mode(
             print()
             continue
 
-        if not await run_input(text, parsers, db, verbose):
-            print("  ⚠  No parser matched this input.")
+        await run_input(text, parsers, db, verbose)
         print()
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # CLI
-# ═══════════════════════════════════════════════════════════════════════════
 
 
 def build_cli() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="local_tester",
-        description="Test scoreboard parsers locally without deploying the bot.",
+        description="Test scoreboard parsers locally without deploying trivial.",
     )
     ap.add_argument(
         "-p", "--prompt",
@@ -417,15 +388,36 @@ def build_cli() -> argparse.ArgumentParser:
         default=None,
         metavar="GAME",
         dest="scores_game",
-        help="Show the leaderboard (same embed as !scores). Pass a game "
-             "name to filter, or omit for all games.",
+        help="Show each game's most recent iteration (same embed as !scores). "
+             "Pass a game name to filter, or omit for all games.",
     )
     ap.add_argument(
-        "--day",
+        "--date",
         type=str,
         metavar="YYYY-MM-DD",
         default=None,
-        help="Filter scores by date (used with --scores; default: today).",
+        help="With --scores: show the scores logged on this date instead of "
+             "the latest iteration (game iterating mid-day shows both).",
+    )
+    ap.add_argument(
+        "--leaderboard",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="GAME",
+        dest="leaderboard_game",
+        help="Show the top-3-per-game leaderboard, all time "
+             "(same embed as !leaderboard). Pass a game name to filter, or "
+             "omit for all games.",
+    )
+    ap.add_argument(
+        "--metric",
+        type=str,
+        metavar="average|top|wins|count",
+        default="average",
+        help="How to rank players: `average` (mean score, default), `top` "
+             "(best single score), `wins` (first-place finishes), or `count` "
+             "(games played).",
     )
     return ap
 
@@ -436,13 +428,35 @@ async def amain(args: argparse.Namespace, parsers: list[ScoreParser]) -> None:
         print(f"Scores are recorded to: {args.db}\n")
 
         # ── Score leaderboard mode (mirrors !scores command) ──────────
-        if args.scores_game is not None:
-            game = args.scores_game or None  # "" → None (all games)
-            day = args.day or _utc_today()
-            records = await db.get_scores(guild_id=3000, game=game, day=day)
+        if args.scores_game is not None or args.date is not None:
+            game = args.scores_game or None  # "" / None → None (all games)
             sort_orders = {p.game: p.score_sort for p in parsers}
-            embed = build_scoreboard_embed(
-                records, game=game, day=day, sort_orders=sort_orders
+            if args.date:
+                records = await db.get_scores_for_day(
+                    guild_id=3000, day=args.date, game=game
+                )
+                embed = build_day_scoreboard_embed(
+                    records, day=args.date, game=game, sort_orders=sort_orders
+                )
+            else:
+                records = await db.get_scores(guild_id=3000, game=game)
+                embed = build_scoreboard_embed(
+                    records, game=game, sort_orders=sort_orders
+                )
+            print(render_embed(embed))
+            return
+
+        # ── Top-3-per-game all-time leaderboard mode (mirrors !leaderboard) ──
+        if args.leaderboard_game is not None:
+            game = args.leaderboard_game or None  # "" → None (all games)
+            metric = resolve_metric(args.metric) or "average"
+            records = await db.get_all_scores(guild_id=3000, game=game)
+            sort_orders = {p.game: p.score_sort for p in parsers}
+            embed = build_leaderboard_embed(
+                records,
+                game=game,
+                sort_orders=sort_orders,
+                metric=metric,
             )
             print(render_embed(embed))
             return
@@ -451,8 +465,7 @@ async def amain(args: argparse.Namespace, parsers: list[ScoreParser]) -> None:
         if args.prompt:
             text = args.prompt
             print(f"Input: {text}\n")
-            if not await run_input(text, parsers, db, args.verbose):
-                print("⚠  No parser matched this input.")
+            await run_input(text, parsers, db, args.verbose)
         elif args.file:
             await file_mode(args.file, parsers, db, args.delimiter, args.verbose)
         else:

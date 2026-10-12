@@ -6,12 +6,13 @@ Description:
 Version: 6.5.0
 """
 
-import json
+from __future__ import annotations
+
 import logging
 import os
 import platform
 import random
-import sys
+from zoneinfo import ZoneInfo
 
 import aiosqlite
 import discord
@@ -19,7 +20,9 @@ from discord.ext import commands, tasks
 from discord.ext.commands import Context
 from dotenv import load_dotenv
 
-from database import DatabaseManager
+from database import DatabaseManager, migrate_user_scores_schema
+from parsers.registry import discover_parsers
+from timeutil import bot_tz, get_timezone
 
 load_dotenv()
 
@@ -74,18 +77,23 @@ Note: the scoreboard feature also requires this intent to read message content f
 """
 intents.message_content = True
 
-# Setup both of the loggers
+# Privileged intent — also enable "Server Members Intent" in the Discord
+# Developer Portal (Applications → your app → Bot → Privileged Gateway
+# Intents). With it, discord.py chunks each guild's members into the cache at
+# startup, so `guild.get_member()` resolves every member's *current* server
+# nickname for leaderboards and the daily scoreboard reminder. Without it,
+# members the bot hasn't seen since restart aren't cached, and the renderer
+# falls back to the (possibly stale) name stored when each score was posted.
+intents.members = True
 
 
 class LoggingFormatter(logging.Formatter):
-    # Colors
     black = "\x1b[30m"
     red = "\x1b[31m"
     green = "\x1b[32m"
     yellow = "\x1b[33m"
     blue = "\x1b[34m"
     gray = "\x1b[38m"
-    # Styles
     reset = "\x1b[0m"
     bold = "\x1b[1m"
 
@@ -108,25 +116,23 @@ class LoggingFormatter(logging.Formatter):
         return formatter.format(record)
 
 
-logger = logging.getLogger("discord_bot")
+logger = logging.getLogger("trivial")
 logger.setLevel(logging.INFO)
 
-# Console handler
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(LoggingFormatter())
-# File handler
+
 file_handler = logging.FileHandler(filename=DISCORD_LOG_PATH, encoding="utf-8", mode="w")
 file_handler_formatter = logging.Formatter(
     "[{asctime}] [{levelname:<8}] {name}: {message}", "%Y-%m-%d %H:%M:%S", style="{"
 )
 file_handler.setFormatter(file_handler_formatter)
 
-# Add the handlers
 logger.addHandler(console_handler)
 logger.addHandler(file_handler)
 
 
-class DiscordBot(commands.Bot):
+class TrivialBot(commands.Bot):
     def __init__(self) -> None:
         super().__init__(
             command_prefix=commands.when_mentioned_or(os.getenv("PREFIX")),
@@ -142,19 +148,60 @@ class DiscordBot(commands.Bot):
         - self.bot.logger # In cogs
         """
         self.logger = logger
-        self.database = None
+        self.database: DatabaseManager | None = None
         self.bot_prefix = os.getenv("PREFIX")
-        self.invite_link = os.getenv("INVITE_LINK")
+        # guild_id -> resolved ZoneInfo; see get_guild_timezone / set_guild_timezone.
+        self._guild_timezone_cache: dict[int, ZoneInfo] = {}
+
+    async def get_guild_timezone(self, guild_id: int) -> ZoneInfo:
+        """The guild's effective timezone, falling back to the bot default.
+
+        A guild's override (set with ``/timezone``) wins; otherwise the bot's
+        default (the ``TIMEZONE`` env var) is used. Cached in memory and
+        refreshed by :meth:`set_guild_timezone`.
+        """
+        cached = self._guild_timezone_cache.get(guild_id)
+        if cached is not None:
+            return cached
+        name = await self.database.get_guild_timezone(guild_id)
+        try:
+            tz = get_timezone(name)
+        except ValueError:
+            self.logger.warning(
+                "Guild %s has invalid timezone %r stored; using the bot default %s",
+                guild_id,
+                name,
+                bot_tz(),
+            )
+            tz = bot_tz()
+        self._guild_timezone_cache[guild_id] = tz
+        return tz
+
+    async def set_guild_timezone(self, guild_id: int, name: str | None) -> ZoneInfo:
+        """Set (or, with ``None``, clear) a guild's timezone override.
+
+        Raises :class:`ValueError` when *name* is not a valid IANA timezone.
+        """
+        tz = get_timezone(name)  # validate before touching the database
+        if name and name.strip():
+            await self.database.set_guild_timezone(guild_id, tz.key)
+        else:
+            await self.database.remove_guild_timezone(guild_id)
+        self._guild_timezone_cache[guild_id] = tz
+        return tz
 
     async def init_db(self) -> None:
         async with aiosqlite.connect(DATABASE_PATH) as db:
+            # Rebuild pre-iteration tables BEFORE schema.sql so its indexes
+            # (which reference the `iteration` column) can be created.
+            await migrate_user_scores_schema(db)
             with open(f"{BASE_DIR}/database/schema.sql", encoding="utf-8") as file:
                 await db.executescript(file.read())
             await db.commit()
 
     async def load_cogs(self) -> None:
         """
-        The code in this function is executed whenever the bot will start.
+        The code in this function is executed whenever trivial will start.
         """
         for file in os.listdir(f"{os.path.realpath(os.path.dirname(__file__))}/cogs"):
             if file.endswith(".py"):
@@ -171,21 +218,22 @@ class DiscordBot(commands.Bot):
     @tasks.loop(minutes=1.0)
     async def status_task(self) -> None:
         """
-        Setup the game status task of the bot.
+        Rotate the "playing …" presence through the names of the games
+        trivial can parse (skipping the example parser).
         """
-        statuses = ["with you!", "with Krypton!", "with humans!"]
+        statuses = self.game_names or ["scores"]
         await self.change_presence(activity=discord.Game(random.choice(statuses)))
 
     @status_task.before_loop
     async def before_status_task(self) -> None:
         """
-        Before starting the status changing task, we make sure the bot is ready
+        Before starting the status changing task, we make sure trivial is ready
         """
         await self.wait_until_ready()
 
     async def setup_hook(self) -> None:
         """
-        This will just be executed when the bot starts the first time.
+        This will just be executed when trivial starts the first time.
         """
         self.logger.info(f"Logged in as {self.user.name}")
         self.logger.info(f"discord.py API version: {discord.__version__}")
@@ -196,6 +244,13 @@ class DiscordBot(commands.Bot):
         self.logger.info("-------------------")
         await self.init_db()
         await self.load_cogs()
+        # Game names for the rotating "playing …" presence, skipping the
+        # example parser. Cached once so parsers aren't re-discovered each tick.
+        self.game_names = [
+            parser.game for parser in discover_parsers() if not parser.hidden
+        ]
+        # Register slash commands with Discord on startup (global scope).
+        await self.tree.sync()
         self.status_task.start()
         self.database = DatabaseManager(
             connection=await aiosqlite.connect(DATABASE_PATH)
@@ -244,19 +299,19 @@ class DiscordBot(commands.Bot):
                 description=f"**Please slow down** - You can use this command again in {f'{round(hours)} hours' if round(hours) > 0 else ''} {f'{round(minutes)} minutes' if round(minutes) > 0 else ''} {f'{round(seconds)} seconds' if round(seconds) > 0 else ''}.",
                 color=0xE02B2B,
             )
-            await context.send(embed=embed)
+            await context.send(embed=embed, silent=True)
         elif isinstance(error, commands.NotOwner):
             embed = discord.Embed(
-                description="You are not the owner of the bot!", color=0xE02B2B
+                description="You are not the owner of trivial!", color=0xE02B2B
             )
-            await context.send(embed=embed)
+            await context.send(embed=embed, silent=True)
             if context.guild:
                 self.logger.warning(
-                    f"{context.author} (ID: {context.author.id}) tried to execute an owner only command in the guild {context.guild.name} (ID: {context.guild.id}), but the user is not an owner of the bot."
+                    f"{context.author} (ID: {context.author.id}) tried to execute an owner only command in the guild {context.guild.name} (ID: {context.guild.id}), but the user is not an owner of trivial."
                 )
             else:
                 self.logger.warning(
-                    f"{context.author} (ID: {context.author.id}) tried to execute an owner only command in the bot's DMs, but the user is not an owner of the bot."
+                    f"{context.author} (ID: {context.author.id}) tried to execute an owner only command in trivial's DMs, but the user is not an owner of trivial."
                 )
         elif isinstance(error, commands.MissingPermissions):
             embed = discord.Embed(
@@ -265,7 +320,7 @@ class DiscordBot(commands.Bot):
                 + "` to execute this command!",
                 color=0xE02B2B,
             )
-            await context.send(embed=embed)
+            await context.send(embed=embed, silent=True)
         elif isinstance(error, commands.BotMissingPermissions):
             embed = discord.Embed(
                 description="I am missing the permission(s) `"
@@ -273,7 +328,7 @@ class DiscordBot(commands.Bot):
                 + "` to fully perform this command!",
                 color=0xE02B2B,
             )
-            await context.send(embed=embed)
+            await context.send(embed=embed, silent=True)
         elif isinstance(error, commands.MissingRequiredArgument):
             embed = discord.Embed(
                 title="Error!",
@@ -281,10 +336,10 @@ class DiscordBot(commands.Bot):
                 description=str(error).capitalize(),
                 color=0xE02B2B,
             )
-            await context.send(embed=embed)
+            await context.send(embed=embed, silent=True)
         else:
             raise error
 
 
-bot = DiscordBot()
+bot = TrivialBot()
 bot.run(os.getenv("TOKEN"))

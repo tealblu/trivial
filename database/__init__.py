@@ -6,138 +6,186 @@ Description:
 Version: 6.5.0
 """
 
+from __future__ import annotations
+
 import json
+from typing import TYPE_CHECKING
 
 import aiosqlite
+
+if TYPE_CHECKING:
+    from parsers.base import ScoreRecord
+
+
+def _iteration_key(value: str) -> tuple[int, int | str]:
+    """Ordering key for an iteration string.
+
+    Numeric puzzles (e.g. Wordle "1925") must compare numerically so that
+    "999" is older than "1000" — a plain string sort gets that wrong.
+    Anything else (e.g. dialed/maptap YYYY-MM-DD share dates) compares
+    lexicographically, which is correct for ISO dates.
+    """
+    try:
+        return 0, int(value)
+    except ValueError:
+        return 1, value
+
+
+async def migrate_user_scores_schema(connection: aiosqlite.Connection) -> None:
+    """Rebuild an old day-keyed ``user_scores`` table as iteration-keyed.
+
+    Pre-iteration databases stored one row per (guild, user, game, day).
+    This rebuilds the table so the primary key is
+    (guild_id, user_id, game, iteration). Rows whose ``meta`` JSON carries a
+    ``number`` (wordle, krillion, catfishing, metazooa) are kept with that
+    iteration; dialed/maptap rows have no puzzle number, so they are dropped
+    (re-record them with ``!backfill``). Fresh or already-migrated tables are
+    left untouched. Run BEFORE executing ``schema.sql`` so its indexes can be
+    created against the new shape.
+    """
+    cursor = await connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='user_scores'"
+    )
+    if await cursor.fetchone() is None:
+        return
+
+    cursor = await connection.execute("PRAGMA table_info(user_scores)")
+    columns = await cursor.fetchall()
+    if any(row[1] == "iteration" for row in columns):
+        return
+
+    await connection.executescript(
+        """
+        BEGIN;
+        CREATE TABLE user_scores_migrated (
+          `guild_id`   varchar(20)  NOT NULL,
+          `user_id`    varchar(20)  NOT NULL,
+          `game`       varchar(32)  NOT NULL,
+          `iteration`  varchar(32)  NOT NULL,
+          `score`      real         NOT NULL,
+          `user_name`  varchar(255) NOT NULL,
+          `meta`       text         NULL,
+          `day`        varchar(10)  NOT NULL,
+          `created_at` timestamp    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (`guild_id`, `user_id`, `game`, `iteration`)
+        );
+        INSERT INTO user_scores_migrated
+            (guild_id, user_id, user_name, game, iteration, score, meta, day, created_at)
+          SELECT guild_id, user_id, user_name, game,
+                 json_extract(meta, '$.number'),
+                 score, meta, day, created_at
+          FROM user_scores
+          WHERE json_extract(meta, '$.number') IS NOT NULL;
+        DROP TABLE user_scores;
+        ALTER TABLE user_scores_migrated RENAME TO user_scores;
+        COMMIT;
+        """
+    )
+    await connection.commit()
 
 
 class DatabaseManager:
     def __init__(self, *, connection: aiosqlite.Connection) -> None:
         self.connection = connection
 
-    async def add_warn(
-        self, user_id: int, server_id: int, moderator_id: int, reason: str
-    ) -> int:
-        """
-        This function will add a warn to the database.
-
-        :param user_id: The ID of the user that should be warned.
-        :param reason: The reason why the user should be warned.
-        """
-        rows = await self.connection.execute(
-            "SELECT id FROM warns WHERE user_id=? AND server_id=? ORDER BY id DESC LIMIT 1",
-            (
-                user_id,
-                server_id,
-            ),
-        )
-        async with rows as cursor:
-            result = await cursor.fetchone()
-            warn_id = result[0] + 1 if result is not None else 1
-            await self.connection.execute(
-                "INSERT INTO warns(id, user_id, server_id, moderator_id, reason) VALUES (?, ?, ?, ?, ?)",
-                (
-                    warn_id,
-                    user_id,
-                    server_id,
-                    moderator_id,
-                    reason,
-                ),
-            )
-            await self.connection.commit()
-            return warn_id
-
-    async def remove_warn(self, warn_id: int, user_id: int, server_id: int) -> int:
-        """
-        This function will remove a warn from the database.
-
-        :param warn_id: The ID of the warn.
-        :param user_id: The ID of the user that was warned.
-        :param server_id: The ID of the server where the user has been warned
-        """
-        await self.connection.execute(
-            "DELETE FROM warns WHERE id=? AND user_id=? AND server_id=?",
-            (
-                warn_id,
-                user_id,
-                server_id,
-            ),
-        )
-        await self.connection.commit()
-        rows = await self.connection.execute(
-            "SELECT COUNT(*) FROM warns WHERE user_id=? AND server_id=?",
-            (
-                user_id,
-                server_id,
-            ),
-        )
-        async with rows as cursor:
-            result = await cursor.fetchone()
-            return result[0] if result is not None else 0
-
-    async def get_warnings(self, user_id: int, server_id: int) -> list:
-        """
-        This function will get all the warnings of a user.
-
-        :param user_id: The ID of the user that should be checked.
-        :param server_id: The ID of the server that should be checked.
-        :return: A list of all the warnings of the user.
-        """
-        rows = await self.connection.execute(
-            "SELECT user_id, server_id, moderator_id, reason, strftime('%s', created_at), id FROM warns WHERE user_id=? AND server_id=?",
-            (
-                user_id,
-                server_id,
-            ),
-        )
-        async with rows as cursor:
-            result = await cursor.fetchall()
-            result_list = []
-            for row in result:
-                result_list.append(row)
-            return result_list
-
     async def set_score_channel(self, server_id: int, channel_id: int) -> None:
-        """
-        Set the channel that the bot monitors for scores in a server.
-
-        :param server_id: The ID of the server.
-        :param channel_id: The ID of the channel to monitor.
-        """
+        """Set the channel trivial monitors for scores in a server."""
         await self.connection.execute(
             "INSERT INTO score_channels(server_id, channel_id) VALUES (?, ?) "
             "ON CONFLICT(server_id) DO UPDATE SET channel_id=excluded.channel_id",
-            (
-                server_id,
-                channel_id,
-            ),
+            (str(server_id), str(channel_id)),
         )
         await self.connection.commit()
 
     async def get_score_channel(self, server_id: int) -> int | None:
-        """
-        Get the channel that the bot monitors for scores in a server.
-
-        :param server_id: The ID of the server.
-        :return: The ID of the monitored channel, or None if not set.
-        """
+        """Get the channel trivial monitors for scores in a server."""
         rows = await self.connection.execute(
             "SELECT channel_id FROM score_channels WHERE server_id=?",
-            (server_id,),
+            (str(server_id),),
         )
         async with rows as cursor:
             result = await cursor.fetchone()
             return int(result[0]) if result is not None else None
 
     async def remove_score_channel(self, server_id: int) -> None:
-        """
-        Remove the monitored score channel from a server.
-
-        :param server_id: The ID of the server.
-        """
+        """Remove the monitored score channel from a server."""
         await self.connection.execute(
             "DELETE FROM score_channels WHERE server_id=?",
-            (server_id,),
+            (str(server_id),),
+        )
+        await self.connection.commit()
+
+    async def set_daily_reminder(
+        self,
+        server_id: int,
+        enabled: bool,
+        reminder_time: str,
+    ) -> None:
+        """Upsert the daily reminder settings for a server."""
+        await self.connection.execute(
+            "INSERT INTO daily_reminders(server_id, enabled, reminder_time) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(server_id) DO UPDATE SET "
+            "enabled=excluded.enabled, reminder_time=excluded.reminder_time, "
+            "last_fired=NULL, updated_at=CURRENT_TIMESTAMP",
+            (
+                str(server_id),
+                1 if enabled else 0,
+                reminder_time,
+            ),
+        )
+        await self.connection.commit()
+
+    async def get_daily_reminder(self, server_id: int) -> dict | None:
+        """Get the daily reminder settings for a server, or None if unset."""
+        rows = await self.connection.execute(
+            "SELECT enabled, reminder_time, last_fired "
+            "FROM daily_reminders WHERE server_id=?",
+            (str(server_id),),
+        )
+        async with rows as cursor:
+            result = await cursor.fetchone()
+            if result is None:
+                return None
+            return {
+                "enabled": bool(result[0]),
+                "reminder_time": result[1],
+                "last_fired": result[2],
+            }
+
+    async def mark_reminder_sent(self, server_id: int, day: str) -> None:
+        """Record that the daily reminder was sent for *day* so it doesn't re-fire."""
+        await self.connection.execute(
+            "UPDATE daily_reminders SET last_fired=? WHERE server_id=?",
+            (day, str(server_id)),
+        )
+        await self.connection.commit()
+
+    async def set_guild_timezone(self, server_id: int, timezone: str) -> None:
+        """Set a server's timezone override (an IANA name)."""
+        await self.connection.execute(
+            "INSERT INTO guild_timezones(server_id, timezone) VALUES (?, ?) "
+            "ON CONFLICT(server_id) DO UPDATE SET "
+            "timezone=excluded.timezone, updated_at=CURRENT_TIMESTAMP",
+            (str(server_id), timezone),
+        )
+        await self.connection.commit()
+
+    async def get_guild_timezone(self, server_id: int) -> str | None:
+        """Get a server's timezone override, or None when it uses the default."""
+        rows = await self.connection.execute(
+            "SELECT timezone FROM guild_timezones WHERE server_id=?",
+            (str(server_id),),
+        )
+        async with rows as cursor:
+            result = await cursor.fetchone()
+            return result[0] if result is not None else None
+
+    async def remove_guild_timezone(self, server_id: int) -> None:
+        """Drop a server's timezone override (back to the bot default)."""
+        await self.connection.execute(
+            "DELETE FROM guild_timezones WHERE server_id=?",
+            (str(server_id),),
         )
         await self.connection.commit()
 
@@ -147,77 +195,89 @@ class DatabaseManager:
         user_id: int,
         user_name: str,
         game: str,
-        day: str,
-        score: int | None,
-        meta: dict | None = None,
+        iteration: str,
+        score: int | float | None,
+        meta: dict[str, str] | None = None,
+        day: str = "",
     ) -> None:
-        """
-        Log one user's score for one game on one day.
-
-        One row per (guild_id, user_id, game, day): re-posting a daily
-        score for the same day overwrites the previous value.
-
-        :param guild_id: The ID of the guild the message was posted in.
-        :param user_id: The ID of the user who posted the score.
-        :param user_name: The user's display name (for logging/embeds).
-        :param game: The game identifier, e.g. "wordle" (matches parser.game).
-        :param day: The date this score belongs to, YYYY-MM-DD.
-        :param score: The numeric score to record.
-        :param meta: Optional extra per-game details, stored as JSON.
-        """
+        """Log one user's score for one puzzle iteration of one game."""
         if score is None:
-            raise ValueError("record_user_score requires a numeric score; parser did not set ScoreResponse.score")
+            raise ValueError(
+                "record_user_score requires a numeric score; "
+                "parser did not set ScoreResponse.score"
+            )
+        if not iteration:
+            raise ValueError(
+                "record_user_score requires an iteration (the game's own puzzle "
+                "identifier); parser did not set ScoreResponse.iteration"
+            )
+        if not day:
+            raise ValueError(
+                "record_user_score requires a day — the date the score was "
+                "logged (reference only, but still stored on every row)"
+            )
 
         await self.connection.execute(
-            "INSERT INTO user_scores (guild_id, user_id, user_name, game, day, score, meta) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(guild_id, user_id, game, day) DO UPDATE SET "
+            "INSERT INTO user_scores "
+            "(guild_id, user_id, user_name, game, iteration, score, meta, day) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id, user_id, game, iteration) DO UPDATE SET "
             "score = excluded.score, user_name = excluded.user_name, "
-            "meta = excluded.meta, created_at = CURRENT_TIMESTAMP",
+            "meta = excluded.meta, day = excluded.day, "
+            "created_at = CURRENT_TIMESTAMP",
             (
                 str(guild_id),
                 str(user_id),
                 user_name,
                 game,
-                day,
+                iteration,
                 score,
                 json.dumps(meta) if meta else None,
+                day,
             ),
         )
         await self.connection.commit()
 
-    async def get_scores(
+    async def delete_guild_scores(self, guild_id: int) -> int:
+        """Delete every recorded score for the given guild."""
+        cursor = await self.connection.execute(
+            "DELETE FROM user_scores WHERE guild_id = ?", (str(guild_id),)
+        )
+        await self.connection.commit()
+        return cursor.rowcount
+
+    async def get_play_days(self, guild_id: int) -> list[tuple[int, str, str]]:
+        """Fetch one row per (user, day) a score was recorded for a guild."""
+        cursor = await self.connection.execute(
+            "SELECT user_id, MAX(user_name), day FROM user_scores "
+            "WHERE guild_id = ? GROUP BY user_id, day ORDER BY day, user_id",
+            (str(guild_id),),
+        )
+        rows = await cursor.fetchall()
+        return [(int(row[0]), row[1], row[2]) for row in rows]
+
+    async def get_all_scores(
         self,
         guild_id: int,
         game: str | None = None,
-        day: str | None = None,
-    ) -> list:
-        """
-        Fetch leaderboard rows for a guild, optionally filtered by game and/or day.
+    ) -> list[ScoreRecord]:
+        """Fetch EVERY recorded score row for a guild (all iterations).
 
-        Results are ordered by game (alphabetical) then score (ascending,
-        lower = better for daily games).  Each row is a
-        :class:`~parsers.base.ScoreRecord`.
-
-        :param guild_id: The guild to query.
-        :param game: If given, restrict to this game identifier.
-        :param day: If given, restrict to this date (YYYY-MM-DD).
+        Unlike :meth:`get_scores`, this does not collapse to each game's latest
+        iteration — it returns the full history, which the all-time
+        ``!leaderboard`` aggregates over. Optionally filter to a single *game*.
         """
         from parsers.base import ScoreRecord  # avoid circular at module level
 
         conditions = ["guild_id = ?"]
-        params: list = [str(guild_id)]
+        params: list[str] = [str(guild_id)]
         if game:
             conditions.append("game = ?")
             params.append(game)
-        if day:
-            conditions.append("day = ?")
-            params.append(day)
 
-        where = " AND ".join(conditions)
         cursor = await self.connection.execute(
-            f"SELECT user_id, user_name, game, day, score, meta "
-            f"FROM user_scores WHERE {where} ORDER BY game, score",
+            f"SELECT user_id, user_name, game, iteration, day, score, meta "
+            f"FROM user_scores WHERE {' AND '.join(conditions)} ORDER BY game",
             params,
         )
         rows = await cursor.fetchall()
@@ -226,9 +286,112 @@ class DatabaseManager:
                 user_id=int(row[0]),
                 user_name=row[1],
                 game=row[2],
-                day=row[3],
-                score=row[4],
-                meta=json.loads(row[5]) if row[5] else None,
+                iteration=row[3],
+                day=row[4],
+                score=row[5],
+                meta=json.loads(row[6]) if row[6] else None,
             )
             for row in rows
+        ]
+
+    async def get_scores_for_day(
+        self,
+        guild_id: int,
+        day: str,
+        game: str | None = None,
+    ) -> list[ScoreRecord]:
+        """Fetch every score logged on *day* (``YYYY-MM-DD``) for a guild.
+
+        *day* is the calendar date a score was posted (in the server's timezone),
+        not a puzzle iteration. A game that iterates or resets mid-day can have
+        scores for more than one iteration on the same day; rows are ordered
+        oldest iteration first so the board can tell the runs apart. Optionally
+        filter to a single *game*.
+        """
+        from parsers.base import ScoreRecord  # avoid circular at module level
+
+        conditions = ["guild_id = ?", "day = ?"]
+        params: list[str] = [str(guild_id), day]
+        if game:
+            conditions.append("game = ?")
+            params.append(game)
+
+        cursor = await self.connection.execute(
+            f"SELECT user_id, user_name, game, iteration, day, score, meta "
+            f"FROM user_scores WHERE {' AND '.join(conditions)}",
+            params,
+        )
+        rows = await cursor.fetchall()
+        records = [
+            ScoreRecord(
+                user_id=int(row[0]),
+                user_name=row[1],
+                game=row[2],
+                iteration=row[3],
+                day=row[4],
+                score=row[5],
+                meta=json.loads(row[6]) if row[6] else None,
+            )
+            for row in rows
+        ]
+        # Games alphabetically, and each game's iterations oldest → newest.
+        records.sort(key=lambda record: (record.game, _iteration_key(record.iteration)))
+        return records
+
+    async def get_scores(
+        self,
+        guild_id: int,
+        game: str | None = None,
+    ) -> list[ScoreRecord]:
+        """Fetch each game's MOST RECENT iteration rows for a guild.
+
+        Scores are keyed by the game's own puzzle iteration, so the "current"
+        board is the latest iteration of every game that has been played.
+        Optionally filter to a single *game*.
+        """
+        from parsers.base import ScoreRecord  # avoid circular at module level
+
+        conditions = ["guild_id = ?"]
+        params: list[str] = [str(guild_id)]
+        if game:
+            conditions.append("game = ?")
+            params.append(game)
+
+        cursor = await self.connection.execute(
+            f"SELECT DISTINCT game, iteration FROM user_scores "
+            f"WHERE {' AND '.join(conditions)}",
+            params,
+        )
+        pairs = await cursor.fetchall()
+
+        latest: dict[str, str] = {}
+        for pair_game, iteration in pairs:
+            if (
+                pair_game not in latest
+                or _iteration_key(iteration) > _iteration_key(latest[pair_game])
+            ):
+                latest[pair_game] = iteration
+
+        if not latest:
+            return []
+
+        placeholders = ", ".join("(?, ?)" for _ in latest)
+        rows = await self.connection.execute(
+            f"SELECT user_id, user_name, game, iteration, day, score, meta "
+            f"FROM user_scores WHERE guild_id = ? "
+            f"AND (game, iteration) IN ({placeholders}) ORDER BY game",
+            [str(guild_id)] + [item for pair in latest.items() for item in pair],
+        )
+        results = await rows.fetchall()
+        return [
+            ScoreRecord(
+                user_id=int(row[0]),
+                user_name=row[1],
+                game=row[2],
+                iteration=row[3],
+                day=row[4],
+                score=row[5],
+                meta=json.loads(row[6]) if row[6] else None,
+            )
+            for row in results
         ]
