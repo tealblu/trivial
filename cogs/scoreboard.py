@@ -78,7 +78,8 @@ class Scoreboard(commands.Cog):
 
     def __init__(self, bot: TrivialBot) -> None:
         self.bot = bot
-        self._tracked_channels: dict[int, int] = {}  # guild_id -> channel_id
+        # guild_id -> channel or thread id trivial watches for score messages
+        self._tracked_channels: dict[int, int] = {}
 
         self.parsers: list[ScoreParser] = discover_parsers()
         for parser in self.parsers:
@@ -87,7 +88,7 @@ class Scoreboard(commands.Cog):
             )
 
     async def _get_tracked_channel(self, guild_id: int) -> int | None:
-        """Return the monitored channel ID for *guild_id*, or None."""
+        """Return the monitored channel or thread ID for *guild_id*, or None."""
         if guild_id not in self._tracked_channels:
             self._tracked_channels[guild_id] = (
                 await self.bot.database.get_score_channel(guild_id)
@@ -96,40 +97,41 @@ class Scoreboard(commands.Cog):
 
     @commands.hybrid_group(
         name="scorechannel",
-        description="Manage the channel trivial monitors for scores.",
+        description="Manage the channel or thread trivial monitors for scores.",
     )
     @commands.guild_only()
     @commands.has_permissions(manage_guild=True)
     @app_commands.default_permissions(manage_guild=True)
     async def scorechannel(self, context: Context) -> None:
         """
-        Manage the channel trivial monitors for scores.
+        Manage the channel or thread trivial monitors for scores.
 
         :param context: The hybrid command context.
         """
         if context.invoked_subcommand is None:
             embed = discord.Embed(
-                description="Please specify a subcommand.\n\n**Subcommands:**\n`set` - Set the channel to monitor for scores.\n`remove` - Stop monitoring scores in this server.\n`show` - Show the currently monitored channel.",
+                description="Please specify a subcommand.\n\n**Subcommands:**\n`set` - Set the channel or thread to monitor for scores.\n`remove` - Stop monitoring scores in this server.\n`show` - Show the currently monitored channel or thread.",
                 color=0xE02B2B,
             )
             await context.send(embed=embed, silent=True)
 
     @scorechannel.command(
         name="set",
-        description="Set the channel trivial monitors for scores.",
+        description="Set the channel or thread trivial monitors for scores.",
     )
     @commands.has_permissions(manage_guild=True)
-    @app_commands.describe(channel="The channel to monitor for score messages.")
+    @app_commands.describe(channel="The channel or thread to monitor for score messages.")
     async def scorechannel_set(
-        self, context: Context, channel: discord.TextChannel
+        self, context: Context, channel: discord.TextChannel | discord.Thread
     ) -> None:
         """
-        Set the channel trivial monitors for scores.
+        Set the channel or thread trivial monitors for scores.
         """
         await self.bot.database.set_score_channel(context.guild.id, channel.id)
         self._tracked_channels[context.guild.id] = channel.id
+        kind = "thread" if isinstance(channel, discord.Thread) else "channel"
         embed = discord.Embed(
-            description=f"Now monitoring scores in {channel.mention}.",
+            description=f"Now monitoring scores in {channel.mention} ({kind}).",
             color=0xBEBEFE,
         )
         await context.send(embed=embed, silent=True)
@@ -155,26 +157,62 @@ class Scoreboard(commands.Cog):
 
     @scorechannel.command(
         name="show",
-        description="Show the currently monitored score channel.",
+        description="Show the currently monitored score channel or thread.",
     )
     @commands.guild_only()
     @commands.has_permissions(manage_guild=True)
     async def scorechannel_show(self, context: Context) -> None:
         """
-        Show the currently monitored score channel.
+        Show the currently monitored score channel or thread.
         """
         channel_id = await self._get_tracked_channel(context.guild.id)
         if channel_id is None:
             embed = discord.Embed(
-                description="No score channel is set for this server. Use `/scorechannel set` to configure one.",
+                description="No score channel or thread is set for this server. Use `/bind` or `/scorechannel set` to configure one.",
                 color=0xE02B2B,
             )
         else:
-            channel = context.guild.get_channel(channel_id)
+            channel = context.guild.get_channel_or_thread(channel_id)
+            if channel is None:
+                where = f"the stored target {channel_id}"
+            else:
+                kind = "thread" if isinstance(channel, discord.Thread) else "channel"
+                where = f"the {kind} {channel.mention}"
             embed = discord.Embed(
-                description=f"Trivial monitors scores in {channel.mention if channel else channel_id}.",
+                description=f"Trivial monitors scores in {where}.",
                 color=0xBEBEFE,
             )
+        await context.send(embed=embed, silent=True)
+
+    @commands.hybrid_command(
+        name="bind",
+        description="Bind trivial to the channel or thread this command is used in.",
+    )
+    @commands.guild_only()
+    @commands.has_permissions(manage_guild=True)
+    @app_commands.default_permissions(manage_guild=True)
+    async def bind(self, context: Context) -> None:
+        """
+        Bind trivial to the channel or thread this command is used in.
+
+        Run it inside a thread to have trivial watch that thread instead of a
+        channel. Only one channel or thread is monitored per server, so binding
+        a new one replaces the previous target.
+
+        Usage:
+            !bind   — watch the channel or thread this message was sent in
+        """
+        channel = context.channel
+        await self.bot.database.set_score_channel(context.guild.id, channel.id)
+        self._tracked_channels[context.guild.id] = channel.id
+        kind = "thread" if isinstance(channel, discord.Thread) else "channel"
+        embed = discord.Embed(
+            description=(
+                f"Bound trivial to {channel.mention} ({kind}). "
+                "Score messages posted here will be recorded."
+            ),
+            color=0xBEBEFE,
+        )
         await context.send(embed=embed, silent=True)
 
     @commands.hybrid_command(
@@ -373,7 +411,7 @@ class Scoreboard(commands.Cog):
 
     @commands.hybrid_command(
         name="backfill",
-        description="Record score messages from the score channel's history.",
+        description="Record score messages from the score channel or thread's history.",
     )
     @commands.guild_only()
     @commands.has_permissions(manage_guild=True)
@@ -389,8 +427,8 @@ class Scoreboard(commands.Cog):
         days: int | None = None,
     ) -> None:
         """
-        Scan the score channel's message history and record any score
-        messages into the database.
+        Scan the score channel or thread's message history and record any
+        score messages into the database.
 
         Usage:
             !backfill         — scan the last 200 messages
@@ -401,16 +439,16 @@ class Scoreboard(commands.Cog):
         channel_id = await self._get_tracked_channel(context.guild.id)
         if channel_id is None:
             embed = discord.Embed(
-                description="No score channel is set for this server. Use `/scorechannel set` first.",
+                description="No score channel or thread is set for this server. Use `/bind` first.",
                 color=0xE02B2B,
             )
             await context.send(embed=embed, silent=True)
             return
 
-        channel = context.guild.get_channel(channel_id)
+        channel = context.guild.get_channel_or_thread(channel_id)
         if channel is None:
             embed = discord.Embed(
-                description="The configured score channel could not be found.",
+                description="The configured score channel or thread could not be found.",
                 color=0xE02B2B,
             )
             await context.send(embed=embed, silent=True)
