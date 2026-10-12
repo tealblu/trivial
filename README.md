@@ -11,6 +11,7 @@ messages. When a user posts their score, trivial remembers it. Trivial can show 
 |------|------|
 | Catfishing | [catfishing.net](https://catfishing.net) |
 | Dialed | [dialed.gg](https://dialed.gg/color) |
+| Geosportle | [geosportle.app](https://geosportle.app) |
 | Krillion | [krillion.io](https://krillion.io) |
 | Maptap | [maptap.gg](https://www.maptap.gg) |
 | Metaflora | [flora.metazooa.com](https://flora.metazooa.com) |
