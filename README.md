@@ -3,14 +3,7 @@
 </p>
 
 **trivial** is a Discord bot that automatically tracks game scores from chat
-messages. When a user posts their score, trivial remembers it keyed to that
-game's own puzzle iteration (e.g. Wordle's puzzle number, or a share's own
-date for games that label puzzles that way) — so boards stay correct even
-when games reset or iterate at different times than the bot's calendar. The
-`!scores` command shows the most recent iteration of every game's scores.
-Each day the bot can also post a reminder in the score channel: a list of the
-supported games, the latest scores, and every player who played yesterday
-with their current streak of consecutive playing days.
+messages. When a user posts their score, trivial remembers it. It's that simple! Ask trivial to show you scores for a certain day, and it will. A daily reminder feature lets you remind your friends to keep playing!
 
 # How to set up
 
@@ -38,8 +31,7 @@ with their current streak of consecutive playing days.
 > messages) and **Server Members Intent** (resolves current server nicknames)
 > under *Bot → Privileged Gateway Intents* in the [Discord Developer
 > Portal](https://discord.com/developers/applications). Without the members
-> intent, players the bot hasn't seen since its last restart may appear on
-> leaderboards under the name they had when the score was recorded, and player nicknames may not be resolved correctly.
+> intent, player names may not be resolved correctly.
 
 ### Docker
 
@@ -93,8 +85,7 @@ Every command above works both as a slash command (`/scores`) and as a prefix co
 
 "Parsers" are used to extract the game's score from a message. Parsers are auto-discovered from the `parsers/` directory. Adding support for a new game is as simple as dropping in a new file that subclasses `ScoreParser`.
 
-Scores are **keyed by the game's own puzzle iteration**, never the date the
-message was posted. Every concrete parser must set `ScoreResponse.iteration`
+Scores are keyed by the game's own puzzle iteration. Every concrete parser must set `ScoreResponse.iteration`
 to the puzzle identifier it reads from the share — the puzzle number (e.g.
 Wordle's `1925`, Metazooa's `1153`) or, for games whose share labels the
 puzzle by date (dialed, maptap), the share's own date as `YYYY-MM-DD`. The
@@ -149,6 +140,7 @@ python local_tester.py -f inputs.txt --db out/test.db  # Custom DB path
 ```
 
 ## AI Disclosure
+
 AI was used to generate the initial framework for this project, as well as some of the documentation. Only open-weight models were used for AI-generated content, run through open-source tooling.
 
 ## License
