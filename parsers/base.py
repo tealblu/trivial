@@ -123,9 +123,15 @@ class ScoreParser(ABC):
         embed.add_field(
             name="Score", value=format_score(score_response.score), inline=True
         )
+        # Footer shows the game's own puzzle identifier: its index number
+        # ("#88") or, for date-labelled shares, the parsed date. The date the
+        # score was logged is not shown; fall back to it only when a parser
+        # never set an iteration.
+        iteration = score_response.iteration
+        if iteration.isdigit():
+            iteration = f"#{iteration}"
         embed.set_footer(
-            text=f"{score_response.username} · {score_response.day} · "
-            f"iteration {score_response.iteration}"
+            text=f"{score_response.username} · {iteration or score_response.day}"
         )
         return embed
 
