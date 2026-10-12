@@ -9,13 +9,17 @@ messages. When a user posts their score, trivial remembers it. Trivial can show 
 
 | Game | Play |
 |------|------|
+| Airportguessr | [planespottle.net](https://planespottle.net/airportguessr) |
 | Catfishing | [catfishing.net](https://catfishing.net) |
 | Dialed | [dialed.gg](https://dialed.gg/color) |
+| Flagle | [flagle-game.com](https://flagle-game.com/) |
 | Geosportle | [geosportle.app](https://geosportle.app) |
+| Gundle | [playgundle.com](https://playgundle.com/) |
 | Krillion | [krillion.io](https://krillion.io) |
 | Maptap | [maptap.gg](https://www.maptap.gg) |
 | Metaflora | [flora.metazooa.com](https://flora.metazooa.com) |
 | Metazooa | [metazooa.com](https://metazooa.com) |
+| Planespottle | [planespottle.net](https://planespottle.net) |
 | Poople | [poople.io](https://poople.io) |
 | Wordle | [nytimes.com](https://www.nytimes.com/games/wordle/index.html) |
 
