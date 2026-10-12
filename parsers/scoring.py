@@ -283,6 +283,104 @@ def build_scoreboard_embed(
     return embed
 
 
+def _iteration_label(iteration: str) -> str:
+    """Render an iteration for the board: numeric becomes ``#1925``."""
+    return f"#{iteration}" if iteration.isdigit() else iteration
+
+
+def _iteration_groups(
+    records: list[ScoreRecord],
+    orders: _SortOrders,
+    name: _DisplayName,
+) -> list[tuple[str | None, list[ScoreRecord]]]:
+    """Group one game's records by iteration, ranked within each group.
+
+    Returns ``(label, ranked_records)`` pairs in the order the iterations
+    first appear (the database orders them oldest → newest). The label is
+    ``None`` when the game has only one iteration — there's nothing to tell
+    apart, so the board looks like the usual one.
+    """
+    grouped: dict[str, list[ScoreRecord]] = {}
+    for record in records:
+        grouped.setdefault(record.iteration, []).append(record)
+
+    multi = len(grouped) > 1
+    return [
+        (
+            _iteration_label(iteration) if multi else None,
+            _ranked(grouped[iteration], orders, name),
+        )
+        for iteration in grouped
+    ]
+
+
+def build_day_scoreboard_embed(
+    records: list[ScoreRecord],
+    *,
+    day: str,
+    game: str | None = None,
+    title: str | None = None,
+    color: int = 0x2F3136,
+    sort_orders: _SortOrders | None = None,
+    guild: discord.Guild | None = None,
+) -> discord.Embed:
+    """Return an embed of every score logged on *day* (``YYYY-MM-DD``).
+
+    Unlike :func:`build_scoreboard_embed`, this shows one calendar day rather
+    than each game's latest puzzle. When a game has scores for more than one
+    iteration that day (it iterated or reset mid-day), each iteration is shown
+    under its own heading so the two boards don't blur together.
+    """
+    orders = sort_orders or {}
+    name = partial(_display_name, guild=guild)
+
+    if not records:
+        label = game.title() if game else "Scores"
+        return _empty_embed(title or f"{_TROPHY} {label} · {day}", color)
+
+    # Single-game view
+    if game:
+        if not title:
+            title = f"{_TROPHY} {game.title()} · {day}"
+        lines: list[str] = []
+        for label, ranked in _iteration_groups(records, orders, name):
+            if label is not None:
+                lines.append(f"**{label}**")
+            lines.extend(
+                f"**{i}.** {name(r)} — **{format_score(r.score)}**"
+                for i, r in enumerate(ranked, 1)
+            )
+        embed = discord.Embed(title=title, description="\n".join(lines), color=color)
+        embed.set_footer(
+            text=f"{len(records)} score{'s' if len(records) != 1 else ''} recorded"
+        )
+        return embed
+
+    # Multi-game view: one field per game.
+    if not title:
+        title = f"{_TROPHY} Scores · {day}"
+    embed = discord.Embed(title=title, color=color)
+
+    grouped = _group_by_game(records)
+    for game_name in sorted(grouped):
+        lines = []
+        for label, ranked in _iteration_groups(grouped[game_name], orders, name):
+            if label is not None:
+                lines.append(f"**{label}**")
+            lines.extend(
+                f"{name(r)} — **{format_score(r.score)}**" for r in ranked
+            )
+        embed.add_field(
+            name=game_name.title(), value="\n".join(lines), inline=True
+        )
+
+    embed.set_footer(
+        text=f"{len(records)} score{'s' if len(records) != 1 else ''} recorded "
+             f"across {len(grouped)} game{'s' if len(grouped) != 1 else ''}"
+    )
+    return embed
+
+
 def build_leaderboard_embed(
     records: list[ScoreRecord],
     *,

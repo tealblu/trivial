@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,7 @@ from parsers import (
     DEFAULT_METRIC,
     METRIC_ALIASES,
     ScoreParser,
+    build_day_scoreboard_embed,
     build_game_link_lines,
     build_leaderboard_embed,
     build_scoreboard_embed,
@@ -26,6 +28,19 @@ if TYPE_CHECKING:
     from discord.ext.commands import Context
 
 logger = logging.getLogger("trivial")
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _normalize_date(value: str) -> str | None:
+    """Return *value* normalized to ``YYYY-MM-DD``, or None if it isn't a date."""
+    text = value.strip()
+    if _ISO_DATE_RE.match(text) is None:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return None
 
 
 def _resolve_leaderboard_metric(
@@ -169,22 +184,28 @@ class Scoreboard(commands.Cog):
     @commands.guild_only()
     @app_commands.describe(
         game="Optional game identifier to filter by, e.g. wordle.",
+        date="Optional date to pull scores for (YYYY-MM-DD), e.g. 2026-10-11.",
     )
     async def scores(
         self,
         context: Context,
         game: str | None = None,
+        date: str | None = None,
     ) -> None:
         """
-        Show scores for the latest iteration of each game.
+        Show scores for the latest iteration of each game, or for a given date.
 
-        Scores are keyed off each game's own puzzle iteration, so this always
-        shows the most recent puzzle of every game, regardless of when games
-        reset or iterate.
+        Scores are keyed off each game's own puzzle iteration, so the default
+        view shows the most recent puzzle of every game, regardless of when
+        games reset or iterate. Pass a *date* (``YYYY-MM-DD``) to see every
+        score logged that day; if a game iterated or reset mid-day, each of its
+        iterations is shown separately.
 
         Usage:
-            !scores        — latest iteration of every game
-            !scores wordle — latest iteration of wordle
+            !scores                    — latest iteration of every game
+            !scores wordle             — latest iteration of wordle
+            !scores 2026-10-11         — every game's scores logged that day
+            !scores wordle 2026-10-11  — wordle's scores logged that day
         """
         # Ack immediately — the leaderboard query over a large (e.g. freshly
         # backfilled) table can outlast Discord's 3-second interaction window.
@@ -192,17 +213,50 @@ class Scoreboard(commands.Cog):
         # avoiding "Unknown interaction" (10062) errors.
         await context.defer()
 
-        records = await context.bot.database.get_scores(
-            guild_id=context.guild.id,
-            game=game,
-        )
+        # Prefix users can only pass positionally, so `!scores 2026-10-11`
+        # lands in the game slot — treat an ISO-looking game as the date.
+        if date is None and game is not None and _ISO_DATE_RE.match(game.strip()):
+            date, game = game, None
+
+        day: str | None = None
+        if date is not None:
+            day = _normalize_date(date)
+            if day is None:
+                embed = discord.Embed(
+                    description=(
+                        "Please use a date in `YYYY-MM-DD` format, "
+                        "e.g. `2026-10-11`."
+                    ),
+                    color=0xE02B2B,
+                )
+                await context.send(embed=embed, silent=True)
+                return
+
         sort_orders = {p.game: p.score_sort for p in self.parsers}
-        embed = build_scoreboard_embed(
-            records,
-            game=game,
-            sort_orders=sort_orders,
-            guild=context.guild,
-        )
+        if day is None:
+            records = await context.bot.database.get_scores(
+                guild_id=context.guild.id,
+                game=game,
+            )
+            embed = build_scoreboard_embed(
+                records,
+                game=game,
+                sort_orders=sort_orders,
+                guild=context.guild,
+            )
+        else:
+            records = await context.bot.database.get_scores_for_day(
+                guild_id=context.guild.id,
+                day=day,
+                game=game,
+            )
+            embed = build_day_scoreboard_embed(
+                records,
+                day=day,
+                game=game,
+                sort_orders=sort_orders,
+                guild=context.guild,
+            )
         await context.send(embed=embed, silent=True)
 
     @commands.hybrid_command(

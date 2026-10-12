@@ -63,6 +63,8 @@ Make sure `.env` exists with at least `TOKEN` and `PREFIX`.
 |---------|-------------|
 | `!/scores` | Each game's most recent iteration of scores (available to everyone) |
 | `!/scores wordle` | Wordle's most recent iteration of scores (available to everyone) |
+| `!/scores 2026-10-11` | Every game's scores logged on that date (available to everyone) |
+| `!/scores wordle 2026-10-11` | Wordle's scores logged on that date; a game that iterated mid-day shows each iteration (available to everyone) |
 | `!/leaderboard` | Top 3 players for each game by average score, all time (available to everyone) |
 | `!/leaderboard wordle` | Top 3 Wordle players by average score, all time (available to everyone) |
 | `!/leaderboard wordle top` | Top 3 Wordle players by best score, all time (available to everyone) |
@@ -138,6 +140,7 @@ Other flags:
 ```
 python local_tester.py --list                          # Show discovered parsers
 python local_tester.py --scores wordle                 # Latest iteration of wordle (same embed as !scores)
+python local_tester.py --scores wordle --date 2026-10-11  # Wordle's scores logged that day
 python local_tester.py --leaderboard wordle            # Top-3-per-game leaderboard (all time)
 python local_tester.py --leaderboard wordle --metric top  # Rank by best score
 python local_tester.py --leaderboard wordle --metric wins # Rank by first-place finishes

@@ -24,6 +24,7 @@ from parsers.base import ScoreParser  # noqa: E402
 from parsers.dispatch import select_parser  # noqa: E402
 from parsers.registry import discover_parsers  # noqa: E402
 from parsers.scoring import (  # noqa: E402
+    build_day_scoreboard_embed,
     build_leaderboard_embed,
     build_scoreboard_embed,
     resolve_metric,
@@ -391,6 +392,14 @@ def build_cli() -> argparse.ArgumentParser:
              "Pass a game name to filter, or omit for all games.",
     )
     ap.add_argument(
+        "--date",
+        type=str,
+        metavar="YYYY-MM-DD",
+        default=None,
+        help="With --scores: show the scores logged on this date instead of "
+             "the latest iteration (game iterating mid-day shows both).",
+    )
+    ap.add_argument(
         "--leaderboard",
         nargs="?",
         const="",
@@ -419,13 +428,21 @@ async def amain(args: argparse.Namespace, parsers: list[ScoreParser]) -> None:
         print(f"Scores are recorded to: {args.db}\n")
 
         # ── Score leaderboard mode (mirrors !scores command) ──────────
-        if args.scores_game is not None:
-            game = args.scores_game or None  # "" → None (all games)
-            records = await db.get_scores(guild_id=3000, game=game)
+        if args.scores_game is not None or args.date is not None:
+            game = args.scores_game or None  # "" / None → None (all games)
             sort_orders = {p.game: p.score_sort for p in parsers}
-            embed = build_scoreboard_embed(
-                records, game=game, sort_orders=sort_orders
-            )
+            if args.date:
+                records = await db.get_scores_for_day(
+                    guild_id=3000, day=args.date, game=game
+                )
+                embed = build_day_scoreboard_embed(
+                    records, day=args.date, game=game, sort_orders=sort_orders
+                )
+            else:
+                records = await db.get_scores(guild_id=3000, game=game)
+                embed = build_scoreboard_embed(
+                    records, game=game, sort_orders=sort_orders
+                )
             print(render_embed(embed))
             return
 
