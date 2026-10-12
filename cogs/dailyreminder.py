@@ -118,10 +118,10 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
                 )
                 continue
 
-            channel = guild.get_channel(channel_id)
+            channel = guild.get_channel_or_thread(channel_id)
             if channel is None:
                 logger.info(
-                    "Daily reminder for guild %s could not find channel %s",
+                    "Daily reminder for guild %s could not find channel or thread %s",
                     guild.name,
                     channel_id,
                 )
@@ -148,7 +148,9 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         await self.bot.wait_until_ready()
 
     def build_reminder_embed(
-        self, channel: discord.abc.GuildChannel, tz: ZoneInfo | None = None
+        self,
+        channel: discord.abc.GuildChannel | discord.Thread,
+        tz: ZoneInfo | None = None,
     ) -> discord.Embed:
         """List every supported game (with its link) in a Discord embed."""
         lines = build_game_link_lines(self.parsers)
@@ -227,7 +229,7 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
     async def build_reminder_embeds(
         self,
         guild_id: int,
-        channel: discord.abc.GuildChannel,
+        channel: discord.abc.GuildChannel | discord.Thread,
         guild: discord.Guild | None = None,
     ) -> list[discord.Embed]:
         """The complete daily reminder as a list of embeds."""
@@ -255,7 +257,7 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
             embed = discord.Embed(
                 description="Please specify a subcommand.\n\n"
                 "**Subcommands:**\n"
-                "`enable` - Enable the daily reminder (posts to the score channel).\n"
+                "`enable` - Enable the daily reminder (posts to the score channel or thread).\n"
                 "`disable` - Disable the daily reminder.\n"
                 "`time` - Set the reminder time (24-hour, e.g. `09:00`).\n"
                 "`show` - Show the current reminder settings.\n"
@@ -276,8 +278,8 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         channel_id = await self.bot.database.get_score_channel(context.guild.id)
         if channel_id is None:
             embed = discord.Embed(
-                description="No score channel is set for this server. "
-                "Use `/scorechannel set` first so the reminder has somewhere to post.",
+                description="No score channel or thread is set for this server. "
+                "Use `/bind` first so the reminder has somewhere to post.",
                 color=0xE02B2B,
             )
             await context.send(embed=embed, silent=True)
@@ -289,7 +291,7 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
             context.guild.id, enabled=True, reminder_time=reminder_time
         )
 
-        channel = context.guild.get_channel(channel_id)
+        channel = context.guild.get_channel_or_thread(channel_id)
         tz_label = str(await self.bot.get_guild_timezone(context.guild.id))
         embed = discord.Embed(
             description=(
@@ -389,7 +391,7 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
 
         state = "enabled" if settings["enabled"] else "disabled"
         channel_id = await self.bot.database.get_score_channel(context.guild.id)
-        channel = context.guild.get_channel(channel_id) if channel_id else None
+        channel = context.guild.get_channel_or_thread(channel_id) if channel_id else None
         tz_label = str(await self.bot.get_guild_timezone(context.guild.id))
 
         lines = [
@@ -401,7 +403,7 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         elif channel_id:
             lines.append(f"**Channel:** {channel_id}")
         else:
-            lines.append("**Channel:** none set — use `/scorechannel set` first.")
+            lines.append("**Channel:** none set — use `/bind` first.")
 
         embed = discord.Embed(
             title="⏰ Daily Reminder",
@@ -421,7 +423,9 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         Send the daily reminder to the current channel
         """
         channel_id = await self.bot.database.get_score_channel(context.guild.id)
-        score_channel = context.guild.get_channel(channel_id) if channel_id else None
+        score_channel = (
+            context.guild.get_channel_or_thread(channel_id) if channel_id else None
+        )
 
         reference = score_channel or context.channel
         embeds = await self.build_reminder_embeds(

@@ -25,6 +25,7 @@ Every supported game is also listed in Discord with `!/games`.
 1. [Add trivial to your server](https://discord.com/oauth2/authorize?client_id=1550155002809557002&permissions=3088&integration_type=0&scope=applications.commands+bot).
 2. Run `/scorechannel set #channel` to choose the channel trivial watches for
    score messages (requires the **Manage Server** permission in that server).
+   To watch a thread instead, open it and run `/bind` (or `!bind`) there.
 3. (Optional) Set the server's timezone so scores land on the right days and
    the daily reminder fires when you expect:
    ```
@@ -33,7 +34,7 @@ Every supported game is also listed in Discord with `!/games`.
    Without an override, every server uses the bot's default timezone (UTC).
 
 That's it! Drop a game result
-into the monitored channel and trivial records it; use `/scores` and
+into the monitored channel or thread and trivial records it; use `/scores` and
 `/leaderboard` to see how everyone is doing.
 
 # Self-hosting (advanced)
@@ -101,12 +102,13 @@ Make sure `.env` exists with at least `TOKEN` and `PREFIX`.
 | `!/leaderboard wordle wins` | Top 3 Wordle players by first-place finishes, all time (available to everyone) |
 | `!/leaderboard wordle count` | Top 3 Wordle players by games played, all time (available to everyone) |
 | `!/games` | List every supported game with a link to play (available to everyone) |
-| `!/scorechannel set #channel` | Set the channel trivial monitors for scores (admins only) |
+| `!/bind` | Bind trivial to the channel or thread the command is used in (admins only) |
+| `!/scorechannel set #channel` | Set the channel or thread trivial monitors for scores (admins only) |
 | `!/scorechannel remove` | Stop monitoring scores in this server (admins only) |
-| `!/scorechannel show` | Show the currently monitored score channel (admins only) |
+| `!/scorechannel show` | Show the currently monitored score channel or thread (admins only) |
 | `!/nuke confirm` | Permanently delete this server's recorded scores (admins only; keeps channel/reminder settings) |
-| `!/backfill` | Scan the score channel's history and record score messages (admins only; `!/backfill 1000` scans more, `0` = all history) |
-| `!/dailyreminder enable` | Enable the daily games reminder (admins only; posts to the score channel) |
+| `!/backfill` | Scan the score channel or thread's history and record score messages (admins only; `!/backfill 1000` scans more, `0` = all history) |
+| `!/dailyreminder enable` | Enable the daily games reminder (admins only; posts to the score channel or thread) |
 | `!/dailyreminder disable` | Disable the daily games reminder (admins only) |
 | `!/dailyreminder time 09:00` | Set the reminder time, 24-hour, in the server's timezone (admins only) |
 | `!/dailyreminder show` | Show the current reminder settings (admins only) |
