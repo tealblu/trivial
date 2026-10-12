@@ -15,12 +15,12 @@ class WordleScoreParser(ScoreParser):
     the date the share was posted.
     """
 
-    # A full pasted share — the header carries the iteration number.
+    # A full pasted share
     example_message = """Wordle 1925 4/6
 
-⬛⬛⬛⬛🟨
-⬛🟩⬛🟨⬛
-🟩🟩⬛⬛🟨
+⬜⬜⬜⬜🟨
+⬜🟩⬜🟨⬜
+🟩🟩⬜⬜🟨
 🟩🟩🟩🟩🟩
 ⬜⬜⬜⬜⬜
 ⬜⬜⬜⬜⬜"""
@@ -35,9 +35,8 @@ class WordleScoreParser(ScoreParser):
         r"(?P<guesses>\d+|[xX])\s*/\s*(?P<total>\d+)",
         re.IGNORECASE,
     )
-    # one row is 5 tiles: green yellow guessed or blank
+    # one row is 5 tiles: green, yellow, or blank (⬜ = letter not in word)
     _row_re = re.compile(r"[\U0001f7e8\U0001f7e9\u2b1b\u2b1c]{5}")
-    _blank = "\u2b1c"  # ⬜ pads a share out to 6 rows
 
     def can_parse(self, message: discord.Message) -> bool:
         if self._header_re.search(message.content) is None:
@@ -51,10 +50,8 @@ class WordleScoreParser(ScoreParser):
         total = header.group("total")
         rows = self._rows(message.content)
 
-        # the grid says how many guesses it took
-        score = sum(1 for row in rows if self._blank not in row)
-        if not score:
-            score = int(total) if guesses == "X" else int(guesses)
+        # get score from header
+        score = int(total) if guesses == "X" else int(guesses)
 
         resp = self._build_response(
             message,
