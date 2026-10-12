@@ -6,6 +6,7 @@
 messages. When a user posts their score, trivial remembers it. It's that simple! Ask trivial to show you scores for a certain day, and it will. A daily reminder feature lets you remind your friends to keep playing!
 
 # How to set up
+0. Set up a new bot in the [discord developer portal](https://discord.com/developers/home).
 
 1. Copy `.env.example` to `.env` and fill in your bot token and prefix:
    ```
