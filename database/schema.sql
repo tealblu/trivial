@@ -5,16 +5,26 @@ CREATE TABLE IF NOT EXISTS `score_channels` (
 );
 
 -- One row per guild: daily reminder configuration.
--- `reminder_time` is "HH:MM" (24-hour) in the bot's target timezone (set via
--- the TIMEZONE env var; UTC by default). `last_fired` stores the last date
--- (YYYY-MM-DD, bot's target timezone) the reminder was sent so it doesn't
--- re-fire that day.
+-- `reminder_time` is "HH:MM" (24-hour) in the server's timezone (see
+-- `guild_timezones`; falls back to the TIMEZONE env var, UTC by default).
+-- `last_fired` stores the last date (YYYY-MM-DD, server's timezone) the
+-- reminder was sent so it doesn't re-fire that day.
 CREATE TABLE IF NOT EXISTS `daily_reminders` (
   `server_id`     varchar(20) NOT NULL,
   `enabled`       int         NOT NULL DEFAULT 0,
   `reminder_time` varchar(5)  NOT NULL DEFAULT '09:00',
   `last_fired`    varchar(10) NULL,
   `updated_at`    timestamp   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`server_id`)
+);
+
+-- One row per guild that overrides the bot's default timezone. `timezone` is
+-- an IANA name (e.g. "America/New_York"). Guilds without a row here use the
+-- bot default (the TIMEZONE env var; UTC when unset).
+CREATE TABLE IF NOT EXISTS `guild_timezones` (
+  `server_id`  varchar(20) NOT NULL,
+  `timezone`   varchar(64) NOT NULL,
+  `updated_at` timestamp   NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`server_id`)
 );
 
@@ -28,8 +38,9 @@ CREATE TABLE IF NOT EXISTS `daily_reminders` (
 -- times than the bot's calendar.
 -- `score` is REAL so decimal scores (e.g. dialed's 40.49/50) store exactly;
 -- most games still write whole numbers.
--- `day` is the date the score was LOGGED (YYYY-MM-DD, bot's target timezone)
--- and exists purely for reference — nothing is keyed or ranked off it.
+-- `day` is the date the score was LOGGED (YYYY-MM-DD, the server's timezone;
+-- see `guild_timezones`) and exists purely for reference — nothing is keyed
+-- or ranked off it.
 CREATE TABLE IF NOT EXISTS `user_scores` (
   `guild_id`   varchar(20)  NOT NULL,
   `user_id`    varchar(20)  NOT NULL,

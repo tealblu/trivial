@@ -161,6 +161,34 @@ class DatabaseManager:
         )
         await self.connection.commit()
 
+    async def set_guild_timezone(self, server_id: int, timezone: str) -> None:
+        """Set a server's timezone override (an IANA name)."""
+        await self.connection.execute(
+            "INSERT INTO guild_timezones(server_id, timezone) VALUES (?, ?) "
+            "ON CONFLICT(server_id) DO UPDATE SET "
+            "timezone=excluded.timezone, updated_at=CURRENT_TIMESTAMP",
+            (str(server_id), timezone),
+        )
+        await self.connection.commit()
+
+    async def get_guild_timezone(self, server_id: int) -> str | None:
+        """Get a server's timezone override, or None when it uses the default."""
+        rows = await self.connection.execute(
+            "SELECT timezone FROM guild_timezones WHERE server_id=?",
+            (str(server_id),),
+        )
+        async with rows as cursor:
+            result = await cursor.fetchone()
+            return result[0] if result is not None else None
+
+    async def remove_guild_timezone(self, server_id: int) -> None:
+        """Drop a server's timezone override (back to the bot default)."""
+        await self.connection.execute(
+            "DELETE FROM guild_timezones WHERE server_id=?",
+            (str(server_id),),
+        )
+        await self.connection.commit()
+
     async def record_user_score(
         self,
         guild_id: int,
@@ -274,7 +302,7 @@ class DatabaseManager:
     ) -> list[ScoreRecord]:
         """Fetch every score logged on *day* (``YYYY-MM-DD``) for a guild.
 
-        *day* is the calendar date a score was posted (in the bot's timezone),
+        *day* is the calendar date a score was posted (in the server's timezone),
         not a puzzle iteration. A game that iterates or resets mid-day can have
         scores for more than one iteration on the same day; rows are ordered
         oldest iteration first so the board can tell the runs apart. Optionally

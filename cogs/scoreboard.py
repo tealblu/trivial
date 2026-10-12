@@ -437,6 +437,7 @@ class Scoreboard(commands.Cog):
         recorded = 0
         games: dict[str, int] = {}
         seen: set[tuple[int, str, str]] = set()
+        tz = await self.bot.get_guild_timezone(context.guild.id)
 
         async for message in channel.history(**kwargs):
             if message.author.bot:
@@ -449,7 +450,7 @@ class Scoreboard(commands.Cog):
                 response = parser.parse(message)
                 # The log date is the date the message was posted; scores are
                 # keyed by the puzzle iteration, so this is reference only.
-                response.day = day_string(message.created_at)
+                response.day = day_string(message.created_at, tz=tz)
                 key = (message.author.id, parser.game, response.iteration)
                 if key in seen:
                     continue  # a newer post for this player/game/iteration is recorded
@@ -493,6 +494,13 @@ class Scoreboard(commands.Cog):
 
         try:
             score_response = parser.parse(message)
+            # The log date is the calendar day the message was posted in the
+            # server's timezone. Reference only — scores are keyed by the
+            # puzzle iteration — but it drives /scores <date> and streaks.
+            score_response.day = day_string(
+                message.created_at,
+                tz=await self.bot.get_guild_timezone(message.guild.id),
+            )
             # Persist before posting so a daily result is never lost if the
             # embed fails.
             await parser.record_score(message, score_response, self.bot.database)

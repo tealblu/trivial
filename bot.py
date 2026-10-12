@@ -12,6 +12,7 @@ import logging
 import os
 import platform
 import random
+from zoneinfo import ZoneInfo
 
 import aiosqlite
 import discord
@@ -21,6 +22,7 @@ from dotenv import load_dotenv
 
 from database import DatabaseManager, migrate_user_scores_schema
 from parsers.registry import discover_parsers
+from timeutil import bot_tz, get_timezone
 
 load_dotenv()
 
@@ -148,6 +150,45 @@ class TrivialBot(commands.Bot):
         self.logger = logger
         self.database: DatabaseManager | None = None
         self.bot_prefix = os.getenv("PREFIX")
+        # guild_id -> resolved ZoneInfo; see get_guild_timezone / set_guild_timezone.
+        self._guild_timezone_cache: dict[int, ZoneInfo] = {}
+
+    async def get_guild_timezone(self, guild_id: int) -> ZoneInfo:
+        """The guild's effective timezone, falling back to the bot default.
+
+        A guild's override (set with ``/timezone``) wins; otherwise the bot's
+        default (the ``TIMEZONE`` env var) is used. Cached in memory and
+        refreshed by :meth:`set_guild_timezone`.
+        """
+        cached = self._guild_timezone_cache.get(guild_id)
+        if cached is not None:
+            return cached
+        name = await self.database.get_guild_timezone(guild_id)
+        try:
+            tz = get_timezone(name)
+        except ValueError:
+            self.logger.warning(
+                "Guild %s has invalid timezone %r stored; using the bot default %s",
+                guild_id,
+                name,
+                bot_tz(),
+            )
+            tz = bot_tz()
+        self._guild_timezone_cache[guild_id] = tz
+        return tz
+
+    async def set_guild_timezone(self, guild_id: int, name: str | None) -> ZoneInfo:
+        """Set (or, with ``None``, clear) a guild's timezone override.
+
+        Raises :class:`ValueError` when *name* is not a valid IANA timezone.
+        """
+        tz = get_timezone(name)  # validate before touching the database
+        if name and name.strip():
+            await self.database.set_guild_timezone(guild_id, tz.key)
+        else:
+            await self.database.remove_guild_timezone(guild_id)
+        self._guild_timezone_cache[guild_id] = tz
+        return tz
 
     async def init_db(self) -> None:
         async with aiosqlite.connect(DATABASE_PATH) as db:

@@ -6,6 +6,7 @@ import logging
 import re
 from collections import defaultdict
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -13,7 +14,7 @@ from discord.ext import commands, tasks
 
 from parsers import build_game_link_lines, build_scoreboard_embed
 from parsers.registry import discover_parsers
-from timeutil import active_streak, bot_tz, now, now_label, yesterday_str
+from timeutil import active_streak, now, now_label, yesterday_str
 
 if TYPE_CHECKING:
     from bot import TrivialBot
@@ -26,8 +27,6 @@ _REMINDER_TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 # Discord caps an embed description at 4096 characters; long player lists
 # are split across several embeds so nobody gets dropped.
 _DESCRIPTION_LIMIT = 4096
-
-_TZ_LABEL = str(bot_tz())  # e.g. "UTC" or "America/New_York"
 
 
 def _lines_to_embeds(
@@ -80,10 +79,6 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
     @tasks.loop(minutes=1.0)
     async def daily_reminder_loop(self) -> None:
         """Every minute, fire reminders for guilds whose time has come."""
-        current = now()
-        current_time = current.strftime("%H:%M")
-        today = current.strftime("%Y-%m-%d")
-
         for guild in self.bot.guilds:
             try:
                 settings = await self.bot.database.get_daily_reminder(guild.id)
@@ -96,6 +91,14 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
 
             if not settings or not settings["enabled"]:
                 continue
+
+            # Each server is its own clock: compare the reminder time and
+            # de-duplicate against the day in the server's timezone.
+            tz = await self.bot.get_guild_timezone(guild.id)
+            current = now(tz)
+            current_time = current.strftime("%H:%M")
+            today = current.strftime("%Y-%m-%d")
+
             if settings["reminder_time"] != current_time:
                 continue
             if settings["last_fired"] == today:
@@ -144,7 +147,9 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
     async def before_daily_reminder_loop(self) -> None:
         await self.bot.wait_until_ready()
 
-    def build_reminder_embed(self, channel: discord.abc.GuildChannel) -> discord.Embed:
+    def build_reminder_embed(
+        self, channel: discord.abc.GuildChannel, tz: ZoneInfo | None = None
+    ) -> discord.Embed:
         """List every supported game (with its link) in a Discord embed."""
         lines = build_game_link_lines(self.parsers)
 
@@ -156,7 +161,7 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
             ),
             color=0xBEBEFE,
         )
-        embed.set_footer(text=f"Daily reminder · {now_label()}")
+        embed.set_footer(text=f"Daily reminder · {now_label(tz)}")
         return embed
 
     async def build_latest_scoreboard_embed(
@@ -174,11 +179,14 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         )
 
     async def build_yesterday_players_embeds(
-        self, guild_id: int, guild: discord.Guild | None = None
+        self,
+        guild_id: int,
+        guild: discord.Guild | None = None,
+        tz: ZoneInfo | None = None,
     ) -> list[discord.Embed]:
         """List every player active yesterday with their current streak.
         """
-        yesterday = yesterday_str()
+        yesterday = yesterday_str(tz)
         days_by_user: dict[int, set[str]] = defaultdict(set)
         user_names: dict[int, str] = {}
         for user_id, user_name, day in await self.bot.database.get_play_days(
@@ -223,10 +231,11 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         guild: discord.Guild | None = None,
     ) -> list[discord.Embed]:
         """The complete daily reminder as a list of embeds."""
+        tz = await self.bot.get_guild_timezone(guild_id)
         return [
-            self.build_reminder_embed(channel),
+            self.build_reminder_embed(channel, tz),
             await self.build_latest_scoreboard_embed(guild_id, guild=guild),
-            *await self.build_yesterday_players_embeds(guild_id, guild=guild),
+            *await self.build_yesterday_players_embeds(guild_id, guild=guild, tz=tz),
         ]
 
     @commands.hybrid_group(
@@ -281,10 +290,11 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         )
 
         channel = context.guild.get_channel(channel_id)
+        tz_label = str(await self.bot.get_guild_timezone(context.guild.id))
         embed = discord.Embed(
             description=(
                 f"Daily reminder enabled in "
-                f"{channel.mention if channel else channel_id} at {reminder_time} ({_TZ_LABEL})."
+                f"{channel.mention if channel else channel_id} at {reminder_time} ({tz_label})."
             ),
             color=0xBEBEFE,
         )
@@ -329,7 +339,7 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
     @commands.has_permissions(manage_guild=True)
     async def dailyreminder_time(self, context: Context, time: str) -> None:
         """
-        Set the daily reminder time in the bot's timezone.
+        Set the daily reminder time in the server's timezone.
         """
         match = _REMINDER_TIME_RE.match(time.strip())
         if match is None:
@@ -348,8 +358,9 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         )
 
         state = "enabled" if enabled else "saved (reminder is disabled)"
+        tz_label = str(await self.bot.get_guild_timezone(context.guild.id))
         embed = discord.Embed(
-            description=f"Daily reminder time set to {normalized} ({_TZ_LABEL}) ({state}).",
+            description=f"Daily reminder time set to {normalized} ({tz_label}) ({state}).",
             color=0xBEBEFE,
         )
         await context.send(embed=embed, silent=True)
@@ -379,10 +390,11 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         state = "enabled" if settings["enabled"] else "disabled"
         channel_id = await self.bot.database.get_score_channel(context.guild.id)
         channel = context.guild.get_channel(channel_id) if channel_id else None
+        tz_label = str(await self.bot.get_guild_timezone(context.guild.id))
 
         lines = [
             f"**Status:** {state}",
-            f"**Time:** {settings['reminder_time']} ({_TZ_LABEL})",
+            f"**Time:** {settings['reminder_time']} ({tz_label})",
         ]
         if channel:
             lines.append(f"**Channel:** {channel.mention}")

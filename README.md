@@ -20,7 +20,30 @@ messages. When a user posts their score, trivial remembers it. It's that simple!
 
 Every supported game is also listed in Discord with `!/games`.
 
-# How to set up
+# Add trivial to your server
+
+You don't need to run anything yourself — trivial is a hosted bot. Just invite
+it to your Discord server:
+
+1. [Add trivial to your server](https://discord.com/oauth2/authorize?client_id=1550155002809557002&permissions=3088&integration_type=0&scope=applications.commands+bot).
+2. Run `/scorechannel set #channel` to choose the channel trivial watches for
+   score messages (requires the **Manage Server** permission in that server).
+3. (Optional) Set the server's timezone so scores land on the right days and
+   the daily reminder fires when you expect:
+   ```
+   /timezone set America/New_York
+   ```
+   Without an override, every server uses the bot's default timezone (UTC).
+
+That's it! Drop a game result
+into the monitored channel and trivial records it; use `/scores` and
+`/leaderboard` to see how everyone is doing.
+
+# Self-hosting (advanced)
+
+Prefer to run your own copy of trivial instead of using a hosted one? You'll
+need a Discord application of your own:
+
 0. Set up a new bot in the [discord developer portal](https://discord.com/developers/home).
 
 1. Copy `.env.example` to `.env` and fill in your bot token and prefix:
@@ -28,12 +51,14 @@ Every supported game is also listed in Discord with `!/games`.
    TOKEN=your-bot-token
    PREFIX=!
    ```
-2. (Optional) Set the bot's target timezone so scores land on the right
-   days — an IANA name like `America/New_York` or `Asia/Tokyo`:
+2. (Optional) Set the bot's **default** timezone — an IANA name like
+   `America/New_York` or `Asia/Tokyo`:
    ```
    TIMEZONE=America/New_York
    ```
-   When unset the bot uses UTC, which keeps every prior behaviour unchanged.
+   This is the fallback for every server that hasn't set its own with
+   `/timezone`. When unset the bot uses UTC, which keeps every prior behaviour
+   unchanged.
 3. Install dependencies:
    ```
    python -m pip install -r requirements.txt
@@ -86,9 +111,12 @@ Make sure `.env` exists with at least `TOKEN` and `PREFIX`.
 | `!/backfill` | Scan the score channel's history and record score messages (admins only; `!/backfill 1000` scans more, `0` = all history) |
 | `!/dailyreminder enable` | Enable the daily games reminder (admins only; posts to the score channel) |
 | `!/dailyreminder disable` | Disable the daily games reminder (admins only) |
-| `!/dailyreminder time 09:00` | Set the reminder time, 24-hour, in the bot's timezone (admins only) |
+| `!/dailyreminder time 09:00` | Set the reminder time, 24-hour, in the server's timezone (admins only) |
 | `!/dailyreminder show` | Show the current reminder settings (admins only) |
 | `!/dailyreminder test` | Preview the daily reminder (plus latest scores and players) in this channel (admins only) |
+| `!/timezone set America/New_York` | Set this server's timezone (admins only) |
+| `!/timezone reset` | Go back to the bot's default timezone (admins only) |
+| `!/timezone show` | Show this server's current timezone (admins only) |
 | `!/sync global` | Re-sync the slash command tree with Discord (bot owner only) |
 | `!/unsync global` | Remove the bot's slash commands (bot owner only) |
 

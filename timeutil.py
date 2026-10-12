@@ -4,9 +4,12 @@ Every part of trivial that needs today's date, yesterday's date, the current
 clock time, or the calendar day a message/share belongs to goes through this
 module.
 
-Set ``TIMEZONE`` to an IANA timezone name, e.g. ``America/New_York`` or
-``Asia/Tokyo``.  It defaults to ``UTC`` so existing deployments behave
-identically until they opt in.
+``TIMEZONE`` sets the *default* IANA timezone name for the whole bot, e.g.
+``America/New_York`` or ``Asia/Tokyo``; it defaults to ``UTC``. Individual
+servers can override it with the ``/timezone`` command and fall back to this
+default when they haven't. Every helper below takes an optional ``tz`` (a
+:class:`~zoneinfo.ZoneInfo`): pass a server's resolved timezone to get that
+server's local dates, or leave it out to use the bot default.
 """
 
 from __future__ import annotations
@@ -18,55 +21,76 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DEFAULT_TIMEZONE = "UTC"
 
+_INVALID_TZ = (
+    "Invalid timezone {name!r} - expected an IANA timezone name "
+    "(e.g. 'UTC', 'America/New_York', 'Europe/London'). "
+    "See https://en.wikipedia.org/wiki/List_of_tz_database_time_zones."
+)
+
+
+def get_timezone(name: str | None) -> ZoneInfo:
+    """Resolve an IANA timezone *name* to a :class:`ZoneInfo`.
+
+    ``None`` or a blank name yields the bot's default timezone. Raises
+    :class:`ValueError` for an unknown timezone so callers can validate input
+    before storing it.
+    """
+    if name is None or not name.strip():
+        return TARGET_TZ
+    candidate = name.strip()
+    try:
+        return ZoneInfo(candidate)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(_INVALID_TZ.format(name=candidate)) from exc
+
 
 def _load_timezone() -> ZoneInfo:
     name = os.getenv("TIMEZONE", default=DEFAULT_TIMEZONE).strip() or DEFAULT_TIMEZONE
-    try:
-        return ZoneInfo(name)
-    except ZoneInfoNotFoundError as exc:
-        raise ValueError(
-            f"Invalid TIMEZONE {name!r} - expected an IANA timezone name "
-            "(e.g. 'UTC', 'America/New_York', 'Europe/London'). "
-            "See https://en.wikipedia.org/wiki/List_of_tz_database_time_zones."
-        ) from exc
+    return get_timezone(name)
 
 
 TARGET_TZ: ZoneInfo = _load_timezone()
 
 
+def _zone(tz: ZoneInfo | None) -> ZoneInfo:
+    """The given timezone, or the bot default when unset."""
+    return tz or TARGET_TZ
+
+
 def bot_tz() -> ZoneInfo:
-    """The bot's configured timezone (e.g. ``America/New_York``)."""
+    """The bot's default timezone (the ``TIMEZONE`` env var / ``UTC``)."""
     return TARGET_TZ
 
 
-def now() -> datetime:
-    """The current moment in the bot's timezone (timezone-aware)."""
-    return datetime.now(TARGET_TZ)
+def now(tz: ZoneInfo | None = None) -> datetime:
+    """The current moment in *tz* (or the bot default). Timezone-aware."""
+    return datetime.now(_zone(tz))
 
 
-def as_bot_tz(value: datetime) -> datetime:
-    """Convert *value* to the bot's timezone.
+def as_bot_tz(value: datetime, tz: ZoneInfo | None = None) -> datetime:
+    """Convert *value* to *tz* (or the bot default).
 
-    Naive datetimes are assumed to be UTC (default for discord timestamps)
+    Naive datetimes are assumed to be UTC (discord.py's default for
+    timestamps).
     """
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(TARGET_TZ)
+    return value.astimezone(_zone(tz))
 
 
-def today_str() -> str:
-    """Today's date as ``YYYY-MM-DD`` in the bot's timezone."""
-    return now().strftime("%Y-%m-%d")
+def today_str(tz: ZoneInfo | None = None) -> str:
+    """Today's date as ``YYYY-MM-DD`` in *tz* (or the bot default)."""
+    return now(tz).strftime("%Y-%m-%d")
 
 
-def yesterday_str() -> str:
-    """Yesterday's date as ``YYYY-MM-DD`` in the bot's timezone."""
-    return (now() - timedelta(days=1)).strftime("%Y-%m-%d")
+def yesterday_str(tz: ZoneInfo | None = None) -> str:
+    """Yesterday's date as ``YYYY-MM-DD`` in *tz* (or the bot default)."""
+    return (now(tz) - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
-def time_str() -> str:
-    """The current clock time as ``HH:MM`` in the bot's timezone."""
-    return now().strftime("%H:%M")
+def time_str(tz: ZoneInfo | None = None) -> str:
+    """The current clock time as ``HH:MM`` in *tz* (or the bot default)."""
+    return now(tz).strftime("%H:%M")
 
 
 def active_streak(days: AbstractSet[str], through: str) -> int:
@@ -80,11 +104,12 @@ def active_streak(days: AbstractSet[str], through: str) -> int:
     return count
 
 
-def day_string(value: datetime) -> str:
-    """The calendar date *value* falls on in the bot's timezone, ``YYYY-MM-DD``."""
-    return as_bot_tz(value).strftime("%Y-%m-%d")
+def day_string(value: datetime, tz: ZoneInfo | None = None) -> str:
+    """The calendar date *value* falls on in *tz*, ``YYYY-MM-DD``."""
+    return as_bot_tz(value, tz).strftime("%Y-%m-%d")
 
 
-def now_label() -> str:
+def now_label(tz: ZoneInfo | None = None) -> str:
     """Short human-friendly date label, e.g. ``2026-09-19 (America/New_York)``."""
-    return f"{today_str()} ({str(bot_tz())})"
+    zone = _zone(tz)
+    return f"{today_str(zone)} ({zone})"
