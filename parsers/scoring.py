@@ -293,7 +293,7 @@ def build_leaderboard_embed(
     guild: discord.Guild | None = None,
     metric: str = DEFAULT_METRIC,
 ) -> discord.Embed:
-    """Return an embed showing the top 3 players for each game's latest iteration."""
+    """Return an embed showing the top 3 players for each game, all time."""
     if metric not in METRIC_LABELS:
         raise ValueError(f"Unknown leaderboard metric: {metric!r}")
     orders = sort_orders or {}
@@ -305,7 +305,7 @@ def build_leaderboard_embed(
     name = partial(_display_name, guild=guild)
 
     label = game.title() if game else "Leaderboard"
-    title = title or f"{_TROPHY} {label} — latest iteration"
+    title = title or f"{_TROPHY} {label} — all time"
 
     if not records:
         return _empty_embed(title, color)
@@ -328,6 +328,6 @@ def build_leaderboard_embed(
         embed.add_field(name=game_name.title(), value="\n".join(lines), inline=True)
 
     embed.set_footer(
-        text=f"{METRIC_LABELS[metric]} · top 3 per game · latest iteration"
+        text=f"{METRIC_LABELS[metric]} · top 3 per game · all time"
     )
     return embed

@@ -63,11 +63,11 @@ Make sure `.env` exists with at least `TOKEN` and `PREFIX`.
 |---------|-------------|
 | `!/scores` | Each game's most recent iteration of scores (available to everyone) |
 | `!/scores wordle` | Wordle's most recent iteration of scores (available to everyone) |
-| `!/leaderboard` | Top 3 players for each game by average score, latest iteration (available to everyone) |
-| `!/leaderboard wordle` | Top 3 Wordle players by average score, latest iteration (available to everyone) |
-| `!/leaderboard wordle top` | Top 3 Wordle players by best score on the latest iteration (available to everyone) |
-| `!/leaderboard wordle wins` | Top 3 Wordle players by first-place finishes (available to everyone) |
-| `!/leaderboard wordle count` | Top 3 Wordle players by games played (available to everyone) |
+| `!/leaderboard` | Top 3 players for each game by average score, all time (available to everyone) |
+| `!/leaderboard wordle` | Top 3 Wordle players by average score, all time (available to everyone) |
+| `!/leaderboard wordle top` | Top 3 Wordle players by best score, all time (available to everyone) |
+| `!/leaderboard wordle wins` | Top 3 Wordle players by first-place finishes, all time (available to everyone) |
+| `!/leaderboard wordle count` | Top 3 Wordle players by games played, all time (available to everyone) |
 | `!/games` | List every supported game with a link to play (available to everyone) |
 | `!/scorechannel set #channel` | Set the channel trivial monitors for scores (admins only) |
 | `!/scorechannel remove` | Stop monitoring scores in this server (admins only) |
@@ -138,7 +138,7 @@ Other flags:
 ```
 python local_tester.py --list                          # Show discovered parsers
 python local_tester.py --scores wordle                 # Latest iteration of wordle (same embed as !scores)
-python local_tester.py --leaderboard wordle            # Top-3-per-game leaderboard (latest iteration)
+python local_tester.py --leaderboard wordle            # Top-3-per-game leaderboard (all time)
 python local_tester.py --leaderboard wordle --metric top  # Rank by best score
 python local_tester.py --leaderboard wordle --metric wins # Rank by first-place finishes
 python local_tester.py -f inputs.txt --verbose

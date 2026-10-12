@@ -207,7 +207,7 @@ class Scoreboard(commands.Cog):
 
     @commands.hybrid_command(
         name="leaderboard",
-        description="Show the top 3 players for each game's latest iteration.",
+        description="Show the top 3 players for each game, all time.",
     )
     @commands.guild_only()
     @app_commands.describe(
@@ -221,7 +221,14 @@ class Scoreboard(commands.Cog):
         metric: str = "average",
     ) -> None:
         """
-        Show the top 3 players for each game's most recent iteration.
+        Show the top 3 players for each game, aggregated over all iterations.
+
+        Usage:
+            !leaderboard              — average score per player, all time
+            !leaderboard wordle       — average score per Wordle player, all time
+            !leaderboard wordle top   — best single score per player
+            !leaderboard wins         — first-place finishes across all iterations
+            !leaderboard count        — games played
         """
         # Ack immediately — the same reasons as /scores: a query over a large
         # (e.g. freshly backfilled) table can outlast Discord's 3-second
@@ -234,7 +241,7 @@ class Scoreboard(commands.Cog):
             await context.send(embed=embed, silent=True)
             return
 
-        records = await context.bot.database.get_scores(
+        records = await context.bot.database.get_all_scores(
             guild_id=context.guild.id,
             game=game,
         )

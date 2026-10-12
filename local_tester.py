@@ -397,7 +397,7 @@ def build_cli() -> argparse.ArgumentParser:
         default=None,
         metavar="GAME",
         dest="leaderboard_game",
-        help="Show the top-3-per-game leaderboard for the latest iteration "
+        help="Show the top-3-per-game leaderboard, all time "
              "(same embed as !leaderboard). Pass a game name to filter, or "
              "omit for all games.",
     )
@@ -429,11 +429,11 @@ async def amain(args: argparse.Namespace, parsers: list[ScoreParser]) -> None:
             print(render_embed(embed))
             return
 
-        # ── Top-3-per-game leaderboard mode (mirrors !leaderboard) ─────
+        # ── Top-3-per-game all-time leaderboard mode (mirrors !leaderboard) ──
         if args.leaderboard_game is not None:
             game = args.leaderboard_game or None  # "" → None (all games)
             metric = resolve_metric(args.metric) or "average"
-            records = await db.get_scores(guild_id=3000, game=game)
+            records = await db.get_all_scores(guild_id=3000, game=game)
             sort_orders = {p.game: p.score_sort for p in parsers}
             embed = build_leaderboard_embed(
                 records,

@@ -228,6 +228,44 @@ class DatabaseManager:
         rows = await cursor.fetchall()
         return [(int(row[0]), row[1], row[2]) for row in rows]
 
+    async def get_all_scores(
+        self,
+        guild_id: int,
+        game: str | None = None,
+    ) -> list[ScoreRecord]:
+        """Fetch EVERY recorded score row for a guild (all iterations).
+
+        Unlike :meth:`get_scores`, this does not collapse to each game's latest
+        iteration — it returns the full history, which the all-time
+        ``!leaderboard`` aggregates over. Optionally filter to a single *game*.
+        """
+        from parsers.base import ScoreRecord  # avoid circular at module level
+
+        conditions = ["guild_id = ?"]
+        params: list[str] = [str(guild_id)]
+        if game:
+            conditions.append("game = ?")
+            params.append(game)
+
+        cursor = await self.connection.execute(
+            f"SELECT user_id, user_name, game, iteration, day, score, meta "
+            f"FROM user_scores WHERE {' AND '.join(conditions)} ORDER BY game",
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [
+            ScoreRecord(
+                user_id=int(row[0]),
+                user_name=row[1],
+                game=row[2],
+                iteration=row[3],
+                day=row[4],
+                score=row[5],
+                meta=json.loads(row[6]) if row[6] else None,
+            )
+            for row in rows
+        ]
+
     async def get_scores(
         self,
         guild_id: int,
