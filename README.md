@@ -22,9 +22,6 @@ Every supported game is also listed in Discord with `!/games`.
 
 # Add trivial to your server
 
-You don't need to run anything yourself — trivial is a hosted bot. Just invite
-it to your Discord server:
-
 1. [Add trivial to your server](https://discord.com/oauth2/authorize?client_id=1550155002809557002&permissions=3088&integration_type=0&scope=applications.commands+bot).
 2. Run `/scorechannel set #channel` to choose the channel trivial watches for
    score messages (requires the **Manage Server** permission in that server).
