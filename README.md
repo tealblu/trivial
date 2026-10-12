@@ -3,7 +3,7 @@
 </p>
 
 **trivial** is a Discord bot that automatically tracks daily game scores from chat
-messages. When a user posts their score, trivial remembers it. It's that simple! Ask trivial to show you scores for a certain day, and it will. A daily reminder feature lets you remind your friends to keep playing!
+messages. When a user posts their score, trivial remembers it. Trivial can show scores for specified days, leaderboards with various metrics, send daily reminder messages so you don't forget to play, track streaks, and more!
 
 # Supported games
 
