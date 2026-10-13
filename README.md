@@ -97,12 +97,12 @@ Make sure `.env` exists with at least `TOKEN` and `PREFIX`.
 
 | Command | Description |
 |---------|-------------|
-| `!/scores` | Each game's most recent iteration of scores (available to everyone) |
-| `!/scores wordle` | Wordle's most recent iteration of scores (available to everyone) |
-| `!/scores 2026-10-11` | Every game's scores logged on that date (available to everyone) |
+| `!/scores` | Each game's most recent iteration of scores, pooled across every server the players share (available to everyone) |
+| `!/scores wordle` | Wordle's most recent iteration of scores, pooled across servers (available to everyone) |
+| `!/scores 2026-10-11` | Every game's scores logged on that date, pooled across servers (available to everyone) |
 | `!/scores wordle 2026-10-11` | Wordle's scores logged on that date; a game that iterated mid-day shows each iteration (available to everyone) |
-| `!/leaderboard` | Top 3 players for each game by average score, all time (available to everyone) |
-| `!/leaderboard wordle` | Top 3 Wordle players by average score, all time (available to everyone) |
+| `!/leaderboard` | Top 3 players for each game by average score, all time, pooled across servers (available to everyone) |
+| `!/leaderboard wordle` | Top 3 Wordle players by average score, all time, pooled across servers (available to everyone) |
 | `!/leaderboard wordle top` | Top 3 Wordle players by best score, all time (available to everyone) |
 | `!/leaderboard wordle wins` | Top 3 Wordle players by first-place finishes, all time (available to everyone) |
 | `!/leaderboard wordle count` | Top 3 Wordle players by games played, all time (available to everyone) |

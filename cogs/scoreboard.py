@@ -241,6 +241,11 @@ class Scoreboard(commands.Cog):
         score logged that day; if a game iterated or reset mid-day, each of its
         iterations is shown separately.
 
+        Scores are pooled across every server the bot shares with the players:
+        a score a member posted in another server still shows here. Only the
+        current members of this server are displayed, and if the same puzzle
+        was recorded in more than one server, the most recent post is used.
+
         Usage:
             !scores                    — latest iteration of every game
             !scores wordle             — latest iteration of wordle
@@ -272,10 +277,13 @@ class Scoreboard(commands.Cog):
                 await context.send(embed=embed, silent=True)
                 return
 
+        # Only current members of this server are shown, so collect their IDs
+        # and let the database pool their scores from every guild it knows.
+        member_ids = [member.id for member in context.guild.members]
         sort_orders = {p.game: p.score_sort for p in self.parsers}
         if day is None:
-            records = await context.bot.database.get_scores(
-                guild_id=context.guild.id,
+            records = await context.bot.database.get_member_scores(
+                member_ids,
                 game=game,
             )
             embed = build_scoreboard_embed(
@@ -285,8 +293,8 @@ class Scoreboard(commands.Cog):
                 guild=context.guild,
             )
         else:
-            records = await context.bot.database.get_scores_for_day(
-                guild_id=context.guild.id,
+            records = await context.bot.database.get_member_scores_for_day(
+                member_ids,
                 day=day,
                 game=game,
             )
@@ -317,6 +325,10 @@ class Scoreboard(commands.Cog):
         """
         Show the top 3 players for each game, aggregated over all iterations.
 
+        Scores are pooled across every server the bot shares with the players;
+        only the current members of this server are ranked, and the same puzzle
+        recorded in more than one server uses the most recent post.
+
         Usage:
             !leaderboard              — average score per player, all time
             !leaderboard wordle       — average score per Wordle player, all time
@@ -335,8 +347,10 @@ class Scoreboard(commands.Cog):
             await context.send(embed=embed, silent=True)
             return
 
-        records = await context.bot.database.get_all_scores(
-            guild_id=context.guild.id,
+        # Pool every member's scores from every server, exactly like !scores.
+        member_ids = [member.id for member in context.guild.members]
+        records = await context.bot.database.get_member_all_scores(
+            member_ids,
             game=game,
         )
         sort_orders = {p.game: p.score_sort for p in self.parsers}

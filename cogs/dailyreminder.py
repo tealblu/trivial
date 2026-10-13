@@ -169,8 +169,18 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
     async def build_latest_scoreboard_embed(
         self, guild_id: int, guild: discord.Guild | None = None
     ) -> discord.Embed:
-        """Build an embed of each game's most recent iteration for *guild_id*."""
-        records = await self.bot.database.get_scores(guild_id=guild_id)
+        """Build an embed of each game's most recent iteration for *guild_id*.
+
+        Scores are pooled across every server the members share; only current
+        members of this guild are shown. Falls back to this guild's own rows
+        when no guild object is available to resolve membership.
+        """
+        if guild is not None:
+            records = await self.bot.database.get_member_scores(
+                [member.id for member in guild.members]
+            )
+        else:
+            records = await self.bot.database.get_scores(guild_id=guild_id)
         sort_orders = {parser.game: parser.score_sort for parser in self.parsers}
         return build_scoreboard_embed(
             records,
@@ -191,9 +201,13 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         yesterday = yesterday_str(tz)
         days_by_user: dict[int, set[str]] = defaultdict(set)
         user_names: dict[int, str] = {}
-        for user_id, user_name, day in await self.bot.database.get_play_days(
-            guild_id
-        ):
+        if guild is not None:
+            play_days = await self.bot.database.get_member_play_days(
+                [member.id for member in guild.members]
+            )
+        else:
+            play_days = await self.bot.database.get_play_days(guild_id)
+        for user_id, user_name, day in play_days:
             days_by_user[user_id].add(day)
             user_names[user_id] = user_name
 

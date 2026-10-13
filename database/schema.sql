@@ -62,3 +62,8 @@ CREATE INDEX IF NOT EXISTS `idx_user_scores_guild_game_iteration`
   ON `user_scores` (`guild_id`, `game`, `iteration`);
 CREATE INDEX IF NOT EXISTS `idx_user_scores_guild_day`
   ON `user_scores` (`guild_id`, `day`);
+
+-- Cross-guild pooling looks scores up by member rather than by guild, so this
+-- keeps `!scores` fast when a roster is large or spread over many servers.
+CREATE INDEX IF NOT EXISTS `idx_user_scores_user`
+  ON `user_scores` (`user_id`);

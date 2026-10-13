@@ -9,12 +9,19 @@ Version: 6.5.0
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from typing import TYPE_CHECKING
 
 import aiosqlite
 
 if TYPE_CHECKING:
     from parsers.base import ScoreRecord
+
+
+# SQLite's SQLITE_MAX_VARIABLE_NUMBER has been 32766 since 3.32, but the
+# cross-guild score queries bind one parameter per member; batch well under
+# the older 999 cap so the same code keeps working on any SQLite build.
+_SQL_VARIABLE_BATCH = 900
 
 
 def _iteration_key(value: str) -> tuple[int, int | str]:
@@ -29,6 +36,38 @@ def _iteration_key(value: str) -> tuple[int, int | str]:
         return 0, int(value)
     except ValueError:
         return 1, value
+
+
+def _dedupe_newest_records(rows: list) -> list[ScoreRecord]:
+    """Collapse raw ``user_scores`` rows to one record per puzzle.
+
+    Rows are pooled from every guild, so the same (user, game, iteration) can
+    appear more than once — a player who posted the same puzzle in two
+    servers, for example. The most recently written row wins (``created_at``
+    is bumped on every upsert). Expects the column order used by
+    :meth:`DatabaseManager._fetch_user_score_rows`.
+    """
+    from parsers.base import ScoreRecord  # avoid circular at module level
+
+    newest: dict[tuple[str, str, str], object] = {}
+    for row in rows:
+        key = (row[0], row[2], row[3])
+        current = newest.get(key)
+        if current is None or (row[7] or "") > (current[7] or ""):  # type: ignore[index]
+            newest[key] = row
+
+    return [
+        ScoreRecord(
+            user_id=int(row[0]),
+            user_name=row[1],
+            game=row[2],
+            iteration=row[3],
+            day=row[4],
+            score=row[5],
+            meta=json.loads(row[6]) if row[6] else None,
+        )
+        for row in newest.values()
+    ]
 
 
 async def migrate_user_scores_schema(connection: aiosqlite.Connection) -> None:
@@ -395,3 +434,151 @@ class DatabaseManager:
             )
             for row in results
         ]
+
+    async def _fetch_user_score_rows(
+        self,
+        user_ids: Collection[int],
+        *,
+        game: str | None = None,
+        day: str | None = None,
+    ) -> list:
+        """Fetch raw ``user_scores`` rows for *user_ids* from EVERY guild.
+
+        Cross-guild pooling is what lets a score a member posted in one server
+        show up in another. The ``IN`` list is batched so a large roster never
+        exceeds SQLite's bound-parameter cap. Expects callers to de-duplicate
+        with :func:`_dedupe_newest_records`.
+        """
+        ids = list(dict.fromkeys(str(user_id) for user_id in user_ids))
+        if not ids:
+            return []
+
+        conditions: list[str] = []
+        extra: list[str] = []
+        if game:
+            conditions.append("game = ?")
+            extra.append(game)
+        if day:
+            conditions.append("day = ?")
+            extra.append(day)
+        suffix = (" AND " + " AND ".join(conditions)) if conditions else ""
+
+        rows: list = []
+        for start in range(0, len(ids), _SQL_VARIABLE_BATCH):
+            batch = ids[start : start + _SQL_VARIABLE_BATCH]
+            placeholders = ", ".join("?" for _ in batch)
+            cursor = await self.connection.execute(
+                "SELECT user_id, user_name, game, iteration, day, score, meta, "
+                f"created_at FROM user_scores "
+                f"WHERE user_id IN ({placeholders}){suffix}",
+                [*batch, *extra],
+            )
+            rows.extend(await cursor.fetchall())
+        return rows
+
+    async def get_member_scores(
+        self,
+        user_ids: Collection[int],
+        game: str | None = None,
+    ) -> list[ScoreRecord]:
+        """Fetch each game's MOST RECENT iteration for the given members.
+
+        Unlike :meth:`get_scores`, scores are pooled across every server: a
+        member's score counts no matter which guild it was posted in. Callers
+        pass the current members of the guild being displayed, so only those
+        members appear. When the same (user, game, iteration) was recorded in
+        several guilds, the most recently written row wins. Optionally filter
+        to a single *game*.
+        """
+        records = _dedupe_newest_records(
+            await self._fetch_user_score_rows(user_ids, game=game)
+        )
+        if not records:
+            return []
+
+        latest: dict[str, str] = {}
+        for record in records:
+            current = latest.get(record.game)
+            if current is None or _iteration_key(record.iteration) > _iteration_key(
+                current
+            ):
+                latest[record.game] = record.iteration
+
+        selected = [
+            record for record in records if latest[record.game] == record.iteration
+        ]
+        selected.sort(key=lambda record: record.game)
+        return selected
+
+    async def get_member_scores_for_day(
+        self,
+        user_ids: Collection[int],
+        day: str,
+        game: str | None = None,
+    ) -> list[ScoreRecord]:
+        """Fetch every score logged on *day* for the given members.
+
+        The cross-guild counterpart of :meth:`get_scores_for_day`: scores are
+        pooled from every server, restricted to *user_ids*, and de-duplicated
+        so the same puzzle recorded in two guilds appears once (most recent
+        wins). Rows come back oldest iteration first within each game,
+        mirroring :meth:`get_scores_for_day`.
+        """
+        records = _dedupe_newest_records(
+            await self._fetch_user_score_rows(user_ids, game=game, day=day)
+        )
+        records.sort(key=lambda record: (record.game, _iteration_key(record.iteration)))
+        return records
+
+    async def get_member_all_scores(
+        self,
+        user_ids: Collection[int],
+        game: str | None = None,
+    ) -> list[ScoreRecord]:
+        """Fetch EVERY score row for the given members, pooled across servers.
+
+        The cross-guild counterpart of :meth:`get_all_scores`: the all-time
+        ``!leaderboard`` aggregates over this. Unlike :meth:`get_member_scores`
+        it keeps every iteration, and the same puzzle recorded in several
+        guilds collapses to the most recently written row. Optionally filter
+        to a single *game*.
+        """
+        records = _dedupe_newest_records(
+            await self._fetch_user_score_rows(user_ids, game=game)
+        )
+        records.sort(key=lambda record: record.game)
+        return records
+
+    async def get_member_play_days(
+        self,
+        user_ids: Collection[int],
+    ) -> list[tuple[int, str, str]]:
+        """One ``(user, name, day)`` row per day each member played anywhere.
+
+        The cross-guild counterpart of :meth:`get_play_days`, used for the
+        daily reminder's streak list: a member's play days are pooled from
+        every server they share with the bot, de-duplicated per day.
+        """
+        ids = list(dict.fromkeys(str(user_id) for user_id in user_ids))
+        if not ids:
+            return []
+
+        names: dict[tuple[int, str], str] = {}
+        for start in range(0, len(ids), _SQL_VARIABLE_BATCH):
+            batch = ids[start : start + _SQL_VARIABLE_BATCH]
+            placeholders = ", ".join("?" for _ in batch)
+            cursor = await self.connection.execute(
+                "SELECT user_id, MAX(user_name), day FROM user_scores "
+                f"WHERE user_id IN ({placeholders}) GROUP BY user_id, day",
+                batch,
+            )
+            for row in await cursor.fetchall():
+                names[(int(row[0]), row[2])] = row[1]
+
+        return sorted(
+            (
+                (user_id, name, day)
+                for (user_id, day), name in names.items()
+            ),
+            key=lambda item: (item[2], item[0]),
+        )
