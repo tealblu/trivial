@@ -359,6 +359,10 @@ class Scoreboard(commands.Cog):
             !games
         """
         lines = build_game_link_lines(self.parsers)
+        lines.append(
+            "To request a new game, open an issue "
+            "[here](https://github.com/tealblu/trivial/issues)!"
+        )
         embed = discord.Embed(
             title="🎮 Supported Games",
             description="\n".join(lines),
