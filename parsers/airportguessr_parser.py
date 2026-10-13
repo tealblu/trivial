@@ -30,7 +30,7 @@ https://planespottle.net/airportguessr"""
     # "I got the airport in X guesses today:" — no puzzle number; the share
     # date is the iteration.
     _header_re = re.compile(
-        r"I\s+got\s+the\s+airport\s+in\s+(?P<guesses>\d+)\s+guesses?\s+today:",
+        r"I\s+got\s+the\s+airport\s+in\s+(?P<guesses>\d+)\s+guess(?:es)?\s+today:",
         re.IGNORECASE,
     )
     # Rows of 🟥 (red) and 🟩 (green) emoji — the grid can have varying
