@@ -190,6 +190,28 @@ class TrivialBot(commands.Bot):
         self._guild_timezone_cache[guild_id] = tz
         return tz
 
+    async def resolve_channel_or_thread(
+        self,
+        guild: discord.Guild,
+        channel_id: int,
+    ) -> discord.abc.GuildChannel | discord.Thread | None:
+        """Resolve *channel_id* within *guild* to a channel or thread.
+
+        Prefers the local cache but falls back to an API fetch. Threads are not
+        reliably cached: an interaction in a thread the bot never received a
+        ``THREAD_CREATE`` for (or one that has since been archived) builds a
+        throwaway ``Thread`` for the command context without adding it to the
+        guild's cache. Cache-only lookups such as ``guild.get_channel_or_thread``
+        then report a perfectly valid—and previously bound—thread as missing.
+        """
+        channel = guild.get_channel_or_thread(channel_id)
+        if channel is not None:
+            return channel
+        try:
+            return await guild.fetch_channel(channel_id)
+        except discord.HTTPException:
+            return None
+
     async def init_db(self) -> None:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             # Rebuild pre-iteration tables BEFORE schema.sql so its indexes

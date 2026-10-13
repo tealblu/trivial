@@ -172,7 +172,9 @@ class Scoreboard(commands.Cog):
                 color=0xE02B2B,
             )
         else:
-            channel = context.guild.get_channel_or_thread(channel_id)
+            channel = await self.bot.resolve_channel_or_thread(
+                context.guild, channel_id
+            )
             if channel is None:
                 where = f"the stored target {channel_id}"
             else:
@@ -449,7 +451,9 @@ class Scoreboard(commands.Cog):
             await context.send(embed=embed, silent=True)
             return
 
-        channel = context.guild.get_channel_or_thread(channel_id)
+        channel = await self.bot.resolve_channel_or_thread(
+            context.guild, channel_id
+        )
         if channel is None:
             embed = discord.Embed(
                 description="The configured score channel or thread could not be found.",

@@ -118,7 +118,7 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
                 )
                 continue
 
-            channel = guild.get_channel_or_thread(channel_id)
+            channel = await self.bot.resolve_channel_or_thread(guild, channel_id)
             if channel is None:
                 logger.info(
                     "Daily reminder for guild %s could not find channel or thread %s",
@@ -291,7 +291,7 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
             context.guild.id, enabled=True, reminder_time=reminder_time
         )
 
-        channel = context.guild.get_channel_or_thread(channel_id)
+        channel = await self.bot.resolve_channel_or_thread(context.guild, channel_id)
         tz_label = str(await self.bot.get_guild_timezone(context.guild.id))
         embed = discord.Embed(
             description=(
@@ -391,7 +391,11 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
 
         state = "enabled" if settings["enabled"] else "disabled"
         channel_id = await self.bot.database.get_score_channel(context.guild.id)
-        channel = context.guild.get_channel_or_thread(channel_id) if channel_id else None
+        channel = (
+            await self.bot.resolve_channel_or_thread(context.guild, channel_id)
+            if channel_id
+            else None
+        )
         tz_label = str(await self.bot.get_guild_timezone(context.guild.id))
 
         lines = [
@@ -424,7 +428,9 @@ class DailyReminder(commands.Cog, name="dailyreminder"):
         """
         channel_id = await self.bot.database.get_score_channel(context.guild.id)
         score_channel = (
-            context.guild.get_channel_or_thread(channel_id) if channel_id else None
+            await self.bot.resolve_channel_or_thread(context.guild, channel_id)
+            if channel_id
+            else None
         )
 
         reference = score_channel or context.channel
