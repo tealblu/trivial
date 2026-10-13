@@ -46,9 +46,10 @@ https://flora.metazooa.com/
         content = message.content
         if self._header_re.search(content) is None:
             return False
-        # needs the site (or the share's own hashtag) and a count or grid
+        # needs the share's own hashtag and a count or grid — the URL is
+        # optional, so links can be stripped (e.g. to drop the embed).
         lowered = content.lower()
-        if "flora.metazooa.com" not in lowered and "metaflora" not in lowered:
+        if "metaflora" not in lowered:
             return False
         return (
             self._guesses_re.search(content) is not None

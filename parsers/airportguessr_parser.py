@@ -44,9 +44,8 @@ https://planespottle.net/airportguessr"""
         # Require at least one grid row so a bare header without tiles doesn't match.
         if not self._rows(content):
             return False
-        # Require the game URL so casual mentions don't match.
-        if "planespottle.net/airportguessr" not in content:
-            return False
+        # The share URL is optional — it can be stripped (e.g. to drop the
+        # embed) and the header + grid still identify the game.
         return True
 
     def parse(self, message: discord.Message) -> ScoreResponse:

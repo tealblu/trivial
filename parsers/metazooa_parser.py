@@ -44,9 +44,9 @@ metazooa.com"""
         content = message.content
         if self._header_re.search(content) is None:
             return False
-        # needs the site and a count or grid
-        if "metazooa" not in content.lower():
-            return False
+        # needs a count or grid — the URL is optional, so links can be
+        # stripped (e.g. to drop the embed); the "Animal #N" header alone
+        # already identifies the game.
         return (
             self._guesses_re.search(content) is not None
             or self._grid_re.search(content) is not None

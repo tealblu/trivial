@@ -28,10 +28,10 @@ Play at: https://playgundle.com/"""
     score_sort = "asc"  # fewer guesses is better
     game_url = "https://playgundle.com/"
 
-    # "GUNDLE Oct 12 — 2/6" or "GUNDLE Oct 12 - 2/6" — game identifier,
-    # date, and score/total. The dash separates the date from the score.
+    # "GUNDLE Oct 12 — 2/6" — game identifier, date, and score/total,
+    # separated by an em dash (—).
     _header_re = re.compile(
-        r"\bGUNDLE\s+(?P<date>\w+\s+\d{1,2})\s*-\s*(?P<guesses>\d+)\s*/\s*(?P<total>\d+)",
+        r"\bGUNDLE\s+(?P<date>\w+\s+\d{1,2})\s*—\s*(?P<guesses>\d+)\s*/\s*(?P<total>\d+)",
         re.IGNORECASE,
     )
     # one row is 7 tiles: green 🟩, yellow 🟨, or blank ⬛
@@ -44,9 +44,8 @@ Play at: https://playgundle.com/"""
         # Require at least one grid row so a bare header without tiles doesn't match.
         if not self._rows(content):
             return False
-        # Require the game URL so casual mentions don't match.
-        if "playgundle.com" not in content:
-            return False
+        # The share URL is optional — it can be stripped (e.g. to drop the
+        # embed) and the header + grid still identify the game.
         return True
 
     def parse(self, message: discord.Message) -> ScoreResponse:

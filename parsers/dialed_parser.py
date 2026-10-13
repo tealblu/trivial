@@ -42,9 +42,11 @@ https://dialed.gg/color?d=1&s=40.49"""
         # Only the Color Daily share — other dialed games/modes never match.
         if self._header_re.search(content) is None:
             return False
-        # Require the share URL AND a "X/50" score line so a text-only
-        # mention of the site doesn't match (and can't record a None score).
-        if "dialed.gg" not in content or parse_fraction_score(content, "50") is None:
+        # Require a "X/50" score line so a text-only mention of the game
+        # doesn't match (and can't record a None score). The share URL is
+        # optional — it can be stripped (e.g. to drop the embed) and the
+        # header + score line still identify the share.
+        if parse_fraction_score(content, "50") is None:
             return False
         # The header must carry the share's own date — that date is the
         # iteration scores are keyed off, so it can't be optional.
