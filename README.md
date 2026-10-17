@@ -21,6 +21,7 @@ messages. When a user posts their score, trivial remembers it. Trivial can show 
 | Metazooa | [metazooa.com](https://metazooa.com) |
 | Planespottle | [planespottle.net](https://planespottle.net) |
 | Poople | [poople.io](https://poople.io) |
+| Songless | [less.gg](https://less.gg/songless) |
 | Wordle | [nytimes.com](https://www.nytimes.com/games/wordle/index.html) |
 
 Every supported game is also listed in Discord with `!/games`.
